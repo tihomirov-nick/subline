@@ -1,5 +1,5 @@
-SUBTITS: AUTOMATIC SUBTITLES FOR VIDEO
-======================================
+SUBTITS
+=======
 
 INSTALLING
 1. Drag the Subtits icon onto the Applications folder next to it.
@@ -10,11 +10,11 @@ The app isn't notarized by Apple, so on the first launch macOS may show
 a warning ("cannot verify the developer" or "Apple could not verify it is free
 of malware"). You only need to allow it once.
 
-  • macOS 15 and later. Close the warning with "Done", open System Settings,
-    go to Privacy & Security, scroll down, click "Open Anyway" next to Subtits
-    and confirm.
+  • On macOS 15 and later, close the warning with "Done", open System
+    Settings, go to Privacy & Security, scroll down, click "Open Anyway"
+    next to Subtits and confirm.
 
-  • macOS 13–14. In Finder, right-click Subtits, choose "Open", then click
+  • On macOS 13–14, right-click Subtits in Finder, choose "Open", then click
     "Open" again in the warning.
 
   • If that didn't help, open Terminal and run:
