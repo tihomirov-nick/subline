@@ -138,8 +138,9 @@ xcrun stapler staple dist/Subtits-1.0.0.dmg
 - Данные пользователя: `~/Library/Application Support/Subtits/` — `Models/` (модели), `Fonts/` (добавленные шрифты),
   `presets.json` (пресеты), `Cache/` (расшифровки).
 
-## Лицензии компонентов
+## Лицензия
 
+Код Subtits распространяется по лицензии MIT (файл `LICENSE`). У сторонних компонентов и шрифтов свои лицензии:
 whisper.cpp — MIT (текст лицензии — `Sources/CWhisper/include/LICENSE-whisper.cpp.txt`); модели Whisper — MIT (OpenAI), русские дообученные — см. их страницы на Hugging Face;
 FFmpeg — сборка GPL (ffmpeg.martin-riedl.de); встроенные и библиотечные шрифты — SIL OFL 1.1 (лицензии лежат
 рядом с файлами шрифтов в `Fonts/` и в папке каждого скачанного шрифта).
