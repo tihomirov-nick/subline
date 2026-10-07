@@ -1,0 +1,92 @@
+import Foundation
+
+/// File system locations used by the app.
+public enum AppPaths {
+    public static let appName = "Subtits"
+
+    /// ~/Library/Application Support/Subtits
+    public static var appSupport: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return ensureDir(base.appendingPathComponent(appName, isDirectory: true))
+    }
+
+    public static var modelsDir: URL { ensureDir(appSupport.appendingPathComponent("Models", isDirectory: true)) }
+    public static var userFontsDir: URL { ensureDir(appSupport.appendingPathComponent("Fonts", isDirectory: true)) }
+    public static var cacheDir: URL { ensureDir(appSupport.appendingPathComponent("Cache", isDirectory: true)) }
+    /// Playable copies of videos that AVFoundation cannot open directly (MKV, WebM, AVI, ...).
+    public static var proxiesDir: URL { ensureDir(cacheDir.appendingPathComponent("Proxies", isDirectory: true)) }
+    public static var presetsFile: URL { appSupport.appendingPathComponent("presets.json") }
+
+    /// A fresh temporary directory for one job (overlay frames, extracted audio, ...).
+    public static func makeTempDir(_ prefix: String) -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(appName)-\(prefix)-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        return ensureDir(dir)
+    }
+
+    @discardableResult
+    static func ensureDir(_ url: URL) -> URL {
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    // MARK: - Bundled resources
+
+    /// Repository root when running from `.build` during development (directory containing Package.swift).
+    static let devRoot: URL? = {
+        var url = Bundle.main.executableURL?.resolvingSymlinksInPath().deletingLastPathComponent()
+        for _ in 0..<10 {
+            guard let current = url else { return nil }
+            if FileManager.default.fileExists(atPath: current.appendingPathComponent("Package.swift").path) {
+                return current
+            }
+            url = current.deletingLastPathComponent()
+        }
+        return nil
+    }()
+
+    /// Directory with fonts shipped inside the app (Contents/Resources/Fonts), or `Fonts/` in the repo during development.
+    public static var bundledFontsDir: URL? {
+        if let url = Bundle.main.resourceURL?.appendingPathComponent("Fonts", isDirectory: true),
+           FileManager.default.fileExists(atPath: url.path) {
+            return url
+        }
+        if let url = devRoot?.appendingPathComponent("Fonts", isDirectory: true),
+           FileManager.default.fileExists(atPath: url.path) {
+            return url
+        }
+        return nil
+    }
+
+    /// Silero VAD model shipped with the app.
+    public static var vadModelURL: URL? {
+        let name = "ggml-silero-v6.2.0.bin"
+        if let url = Bundle.main.resourceURL?.appendingPathComponent(name),
+           FileManager.default.fileExists(atPath: url.path) {
+            return url
+        }
+        if let url = devRoot?.appendingPathComponent("Resources").appendingPathComponent(name),
+           FileManager.default.fileExists(atPath: url.path) {
+            return url
+        }
+        return nil
+    }
+
+    /// The ffmpeg binary: bundled helper first, then the development copy, then a system install.
+    public static var ffmpegURL: URL? {
+        var candidates: [URL] = []
+        if let env = ProcessInfo.processInfo.environment["SUBTITS_FFMPEG"] {
+            candidates.append(URL(fileURLWithPath: env))
+        }
+        candidates.append(Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/ffmpeg"))
+        if let exeDir = Bundle.main.executableURL?.deletingLastPathComponent() {
+            candidates.append(exeDir.appendingPathComponent("ffmpeg"))
+        }
+        if let root = devRoot {
+            candidates.append(root.appendingPathComponent("Vendor/ffmpeg/ffmpeg"))
+        }
+        candidates.append(URL(fileURLWithPath: "/opt/homebrew/bin/ffmpeg"))
+        candidates.append(URL(fileURLWithPath: "/usr/local/bin/ffmpeg"))
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0.path) }
+    }
+}

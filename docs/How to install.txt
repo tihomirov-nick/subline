@@ -1,0 +1,83 @@
+SUBTITS: AUTOMATIC SUBTITLES FOR VIDEO
+======================================
+
+INSTALLING
+1. Drag the Subtits icon onto the Applications folder next to it.
+2. Open the Applications folder in Finder and launch Subtits.
+
+IF macOS WON'T OPEN THE APP
+The app isn't notarized by Apple, so on the first launch macOS may show
+a warning ("cannot verify the developer" or "Apple could not verify it is free
+of malware"). You only need to allow it once.
+
+  • macOS 15 and later. Close the warning with "Done", open System Settings,
+    go to Privacy & Security, scroll down, click "Open Anyway" next to Subtits
+    and confirm.
+
+  • macOS 13–14. In Finder, right-click Subtits, choose "Open", then click
+    "Open" again in the warning.
+
+  • If that didn't help, open Terminal and run:
+        xattr -dr com.apple.quarantine /Applications/Subtits.app
+
+FIRST LAUNCH
+1. On the left, click "Download Whisper Large v3 Turbo" (about 870 MB).
+   The speech recognition model is downloaded once, after that everything
+   works offline. Other models, including ones fine-tuned on Russian speech,
+   are under the "Models" button.
+2. Drop a video in any format onto the window (MP4, MOV, MKV, AVI, WEBM…).
+3. Recognition starts on its own. You can fix the text in the list on the left.
+4. On the right, in the inspector, set up the preset: font, size, color,
+   position, number of lines (1 to 3), case and punctuation. Sizes and
+   coordinates are in pixels of the frame. You can drag subtitles right
+   on the video.
+5. The "Export" button at the top right saves the video with burned-in
+   subtitles as MP4. The arrow next to it offers HEVC, ProRes, a transparent
+   ProRes 4444 layer for editing, or an SRT file.
+
+LANGUAGE
+Subtits works in Russian and English. Choose the language in Settings
+(Subtits menu > Settings…, or ⌘,).
+
+SUBTITLE EDITOR
+At the top of the inspector, choose what your changes apply to.
+  • "All" changes the common style (the preset) of all subtitles.
+  • "Group" changes the subtitles of one group, for example a second
+    speaker at the top of the frame.
+  • "Subtitle" changes only the selected subtitles (⌘-click or ⇧-click
+    in the list) or the one on screen now. Such a subtitle can have its own
+    font, color and position.
+  • "Words" works with the words you click right on the video (hold ⇧ to pick
+    several). They can get their own color, font, size, slant, UPPERCASE
+    and a highlight plate.
+A changed property is highlighted in blue. The arrow next to it brings back
+the common style.
+
+FONTS
+Montserrat, Manrope, Oswald, Unbounded, Dela Gothic One, Playfair Display,
+Cormorant Garamond and Caveat are built into the app and look the same
+on every Mac. The font library (⇧⌘T) has 43 more free fonts with Cyrillic,
+each installs with one button. Paid fonts (Stapel, Akkordeon) are bought on
+the foundry's site, then their files are dropped onto the library window.
+
+PLAYBACK AND SHORTCUTS
+  Space ............. play / pause (or click the video)
+  ← / → ............. one frame back / forward
+  ⇧← / ⇧→ ........... one second back / forward
+  ↑ / ↓ ............. previous / next subtitle
+  ⌘B ................ split the subtitle at the playhead
+  ⌘G ................ group the selected subtitles
+  ⌥⌘C / ⌥⌘V ......... copy / paste style
+  Esc ............... back to "All subtitles"
+  ⌘Z / ⇧⌘Z .......... undo / redo
+  ⌘E ................ save the video with subtitles
+  ⌥⌘I ............... show / hide the inspector
+  ⌘, ................ settings and language
+
+PRESETS
+You can share presets with colleagues. Open the "…" menu next to the preset
+and choose "Export Preset…" or "Import Presets…".
+
+REQUIREMENTS
+macOS 13.3 or later. Subtits is fastest on Macs with Apple Silicon (M1 and
+later). On Intel Macs recognition runs on the CPU and is noticeably slower.
