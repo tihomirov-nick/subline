@@ -103,6 +103,7 @@ VERSION=1.1.0 ./scripts/make_dmg.sh
 | `swift scripts/make_icon.swift` | рисует иконку → `Resources/AppIcon.icns` |
 | `scripts/build_app.sh` | universal-сборка приложения → `build/Subtits.app` (ffmpeg в `Contents/Helpers`, шрифты из `Fonts/`), версия SDK в бинарнике, подпись |
 | `scripts/make_dmg.sh` | `build_app.sh` + DMG с ярлыком Applications и инструкциями на русском и английском |
+| `scripts/release.sh` | публикует релиз на GitHub: собирает DMG из закоммиченного кода, ставит тег `v<версия>`, пушит и создаёт релиз с DMG (`VERSION=1.5.0 NOTES=заметки.md ./scripts/release.sh`, нужен токен GitHub в Связке ключей) |
 
 SwiftPM записывает в поле SDK бинарника минимальную версию системы (13.3), а macOS по этому полю решает,
 показывать ли приложению современный дизайн. Поэтому `build_app.sh` после компиляции записывает туда настоящую
