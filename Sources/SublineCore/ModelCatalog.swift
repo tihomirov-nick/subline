@@ -31,7 +31,7 @@ public enum ModelCatalog {
     public static let models: [WhisperModelInfo] = [
         WhisperModelInfo(
             id: "large-v3-turbo-q8_0", name: "Whisper Large v3 Turbo",
-            details: L("Быстрая и точная, понимает русский и еще около 100 языков. Подходит для большинства видео"),
+            details: L("Быстрая и точная, понимает русский и ещё около 100 языков. Подходит для большинства видео"),
             summary: L("Быстрая и точная, около 100 языков"),
             fileName: "ggml-large-v3-turbo-q8_0.bin", url: URL(string: whisperCpp + "ggml-large-v3-turbo-q8_0.bin")!,
             sizeBytes: 874_188_075, sha256: "317eb69c11673c9de1e1f0d459b253999804ec71ac4c23c17ecf5fbe24e259a1",
@@ -64,7 +64,7 @@ public enum ModelCatalog {
             recommended: false, russianTuned: false
         ),
         WhisperModelInfo(
-            id: "large-v3-turbo-q5_0", name: L("Whisper Large v3 Turbo (легкая)"),
+            id: "large-v3-turbo-q5_0", name: L("Whisper Large v3 Turbo (лёгкая)"),
             details: L("Сжатая версия Turbo. Качество почти то же, а файл меньше"),
             summary: L("Сжатая Turbo, файл меньше"),
             fileName: "ggml-large-v3-turbo-q5_0.bin", url: URL(string: whisperCpp + "ggml-large-v3-turbo-q5_0.bin")!,

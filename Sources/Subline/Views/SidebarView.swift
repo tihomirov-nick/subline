@@ -138,7 +138,7 @@ private struct RecognitionPanel: View {
     private var buttonHelp: String {
         if model.updateInProgress { return L("Сейчас ставится обновление, Subline скоро перезапустится") }
         if model.transcriptFromCache, let transcript = model.transcript {
-            return L("Открыта сохраненная расшифровка (%@). Нажмите, чтобы распознать речь заново", "\(transcript.modelName)")
+            return L("Открыта сохранённая расшифровка (%@). Нажмите, чтобы распознать речь заново", "\(transcript.modelName)")
         }
         return L("Распознать речь в видео (⌘R)")
     }
@@ -190,7 +190,7 @@ private struct DownloadModelPanel: View {
                             .frame(maxWidth: .infinity)
                     }
                     .appButton(.primary)
-                    .help(L("Модель распознавания скачивается один раз, потом все работает без интернета"))
+                    .help(L("Модель распознавания скачивается один раз, потом всё работает без интернета"))
                 } else {
                     Button {
                         modelStore.cancelDownload(recommended.id)

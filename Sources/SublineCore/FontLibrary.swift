@@ -15,7 +15,7 @@ public enum FontError: LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .notAFont(let name): return L("Файл «%@» не является шрифтом (нужен .ttf, .otf или .ttc)", "\(name)")
+        case .notAFont(let name): return L("Файл «%@» не похож на шрифт, нужен .ttf, .otf или .ttc", "\(name)")
         }
     }
 }

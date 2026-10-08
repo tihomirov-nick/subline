@@ -67,11 +67,11 @@ struct SublineApp: App {
                 Button(model.player.isPlaying ? L("Пауза   (пробел)") : L("Воспроизвести   (пробел)")) { model.player.togglePlay() }
                     .disabled(!model.player.isReady)
                 Divider()
-                Button(L("Кадр вперед   (→)")) { model.player.step(frames: 1) }
+                Button(L("Кадр вперёд   (→)")) { model.player.step(frames: 1) }
                     .disabled(!model.hasMedia)
                 Button(L("Кадр назад   (←)")) { model.player.step(frames: -1) }
                     .disabled(!model.hasMedia)
-                Button(L("Секунда вперед   (⇧→)")) { model.player.seek(to: model.player.currentTime + 1) }
+                Button(L("Секунда вперёд   (⇧→)")) { model.player.seek(to: model.player.currentTime + 1) }
                     .disabled(!model.hasMedia)
                 Button(L("Секунда назад   (⇧←)")) { model.player.seek(to: model.player.currentTime - 1) }
                     .disabled(!model.hasMedia)

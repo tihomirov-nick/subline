@@ -81,11 +81,21 @@ PLAYBACK AND SHORTCUTS
   ⌘Z / ⇧⌘Z .......... undo / redo
   ⌘E ................ save the video with subtitles
   ⌥⌘I ............... show / hide the style panel
-  ⌘, ................ settings (interface language)
+  ⌘, ................ settings (language, sounds, menu bar icon, updates)
 
 PRESETS
 You can share presets with colleagues. Open the "…" menu next to the preset
 and choose "Export Preset…" or "Import Presets…".
+
+UPDATES
+After launch and once a day Subline checks GitHub for a new version. If there
+is one, a card appears at the bottom of the list on the left. "Update" installs
+the new version and restarts Subline, "Later" hides the card until the next
+check, "Skip" stops offering this version. An update doesn't install while
+speech is recognized or a video is exported. To check by hand, choose "Check
+for Updates…" in the Subline menu; the "Check for updates" switch in Settings
+(⌘,) turns the automatic checks off. Subline can't replace a copy launched
+right from the DMG or from Downloads, so keep the app in Applications.
 
 REQUIREMENTS
 macOS 13.3 or later. Subline is fastest on Macs with Apple Silicon (M1 and

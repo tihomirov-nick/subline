@@ -18,7 +18,7 @@ struct TransportBar: View {
             }
             PlayButton(player: player)
                 .padding(.horizontal, 3)
-            IconButton(symbol: "forward.frame.fill", help: L("Кадр вперед (→), секунда вперед (⇧→)"), size: 28, filled: false) {
+            IconButton(symbol: "forward.frame.fill", help: L("Кадр вперёд (→), секунда вперёд (⇧→)"), size: 28, filled: false) {
                 player.step(frames: 1)
             }
             IconButton(symbol: "forward.end.fill", help: L("Следующий субтитр (↓)"), size: 28, filled: false) {

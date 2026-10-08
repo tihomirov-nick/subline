@@ -12,7 +12,7 @@ extension Updater.Failure {
         case .rateLimited: return L("GitHub ограничил запросы")
         case .noInstaller: return L("В релизе нет установщика")
         case .download: return L("Загрузка прервалась")
-        case .damaged: return L("Установщик поврежден")
+        case .damaged: return L("Установщик повреждён")
         case .notTrusted: return L("Подпись не совпадает")
         case .cannotReplace: return L("Не удалось заменить Subline")
         }
@@ -21,11 +21,11 @@ extension Updater.Failure {
     /// Why, and what to do: in the tooltip.
     var help: String {
         switch self {
-        case .offline: return L("Проверьте интернет и попробуйте еще раз")
+        case .offline: return L("Проверьте интернет и попробуйте ещё раз")
         case .rateLimited: return L("С этого адреса было слишком много запросов к GitHub. Попробуйте через час")
         case .noInstaller: return L("К новой версии не приложен DMG. Скачайте его позже со страницы релиза")
-        case .download: return L("Загрузка не закончилась. Попробуйте еще раз или скачайте DMG со страницы релиза")
-        case .damaged: return L("Скачанный DMG не совпадает с релизом или в нем нет новой версии Subline")
+        case .download: return L("Загрузка не закончилась. Попробуйте ещё раз или скачайте DMG со страницы релиза")
+        case .damaged: return L("Скачанный DMG не совпадает с релизом или в нём нет новой версии Subline")
         case .notTrusted:
             return L("Новая версия подписана не так, как установленная, поэтому сама она не ставится. Скачайте DMG со страницы релиза и перетащите Subline в папку «Программы»")
         case .cannotReplace:
@@ -215,7 +215,7 @@ struct UpdateBanner: View {
     private var updateHelp: String {
         if updater.isDevelopmentBuild { return L("Сборка из исходников не заменяет себя. Установите Subline из DMG") }
         if model.isBusy { return L("Обновление перезапустит Subline, поэтому оно станет доступно, когда закончится распознавание или экспорт") }
-        return L("Скачать новую версию, установить ее и перезапустить Subline")
+        return L("Скачать новую версию, установить её и перезапустить Subline")
     }
 
     private var icon: some View {

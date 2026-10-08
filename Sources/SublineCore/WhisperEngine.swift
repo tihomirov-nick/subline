@@ -39,7 +39,7 @@ public enum WhisperError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .modelNotFound(let path): return L("Файл модели не найден: %@", "\(path)")
-        case .modelLoadFailed(let name): return L("Не удалось загрузить модель «%@». Возможно, файл поврежден, удалите модель и скачайте ее заново", "\(name)")
+        case .modelLoadFailed(let name): return L("Не удалось загрузить модель «%@». Возможно, файл повреждён, удалите модель и скачайте её заново", "\(name)")
         case .failed(let code): return L("Ошибка распознавания (код %@)", "\(code)")
         case .cancelled: return L("Распознавание отменено")
         case .emptyAudio: return L("Звуковая дорожка пустая")

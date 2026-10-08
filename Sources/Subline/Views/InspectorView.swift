@@ -190,7 +190,7 @@ private struct ScopeBar: View {
         case .group:
             return model.contextGroupID == nil ? L("Выделите субтитры одной группы или создайте группу (⌘G)") : L("Стиль группы")
         case .cues: return L("Только выбранные субтитры (или тот, что под курсором)")
-        case .words: return L("Щелкните слово на видео, с ⇧ можно выбрать несколько. Стиль слов сохраняется при правке текста")
+        case .words: return L("Щёлкните слово на видео, с ⇧ можно выбрать несколько. Стиль слов сохраняется при правке текста")
         }
     }
 
@@ -332,7 +332,7 @@ private struct TextTab: View {
             }
             .appButton(.secondary)
             .controlSize(.small)
-            .help(L("Бесплатные шрифты с кириллицей, ставятся в один клик (⇧⌘T)"))
+            .help(L("Открыть библиотеку бесплатных шрифтов с кириллицей (⇧⌘T)"))
             IconButton(symbol: "plus", help: L("Добавить файлы шрифтов (.otf, .ttf)")) {
                 model.addFonts()
             }
@@ -429,7 +429,7 @@ private struct LayoutTab: View {
     var body: some View {
         StyleSection(L("Кадр")) {
             Row(title: model.hasVideo ? L("Размер видео") : L("Формат превью"),
-                help: L("Все значения в пикселях этого кадра. Для видео другого размера стиль масштабируется сам")) {
+                help: L("Все значения указаны в пикселях этого кадра. Для видео другого размера стиль масштабируется сам")) {
                 Text(verbatim: "\(Int(model.frameWidth)) × \(Int(model.frameHeight)) px")
                     .font(.system(size: 12.5).monospacedDigit())
                     .foregroundStyle(Palette.secondary)
