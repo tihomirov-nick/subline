@@ -8,14 +8,16 @@ public enum AppPaths {
     public static var appSupport: URL { ensureDir(supportURL) }
 
     /// The folder of Subtits (the app's earlier name) becomes Subline's on first use: presets, models, fonts and saved
-    /// transcripts move with it.
+    /// transcripts move with it. The old name stays as a link to the new folder: Slovo keeps its Whisper models in
+    /// Subtits/Models, shared with this app.
     private static let supportURL: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let url = base.appendingPathComponent(appName, isDirectory: true)
         let old = base.appendingPathComponent(FormerName.folderName, isDirectory: true)
         let files = FileManager.default
-        if !files.fileExists(atPath: url.path), files.fileExists(atPath: old.path) {
-            try? files.moveItem(at: old, to: url)
+        if !files.fileExists(atPath: url.path), files.fileExists(atPath: old.path),
+           (try? files.moveItem(at: old, to: url)) != nil {
+            try? files.createSymbolicLink(atPath: old.path, withDestinationPath: appName)
         }
         return url
     }()
