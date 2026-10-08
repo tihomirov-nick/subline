@@ -67,10 +67,12 @@ final class FontStore: ObservableObject {
                 installing[font.id] = nil
                 refresh()
                 onChange?()
+                SoundEffects.play(.mark)
             } catch {
                 try? FileManager.default.removeItem(at: staging)
                 installing[font.id] = nil
                 lastError = L("Не удалось скачать «%@»: %@", "\(font.family)", "\(error.localizedDescription)")
+                SoundEffects.play(.failure)
             }
         }
     }
@@ -84,6 +86,7 @@ final class FontStore: ObservableObject {
         try? FileManager.default.removeItem(at: font.installDir)
         refresh()
         onChange?()
+        SoundEffects.play(.delete)
     }
 
     // MARK: - Previews

@@ -8,15 +8,25 @@ cd "$ROOT"
 
 APP_NAME="Subline"
 BUNDLE_ID="${BUNDLE_ID:-com.subline.app}"
-VERSION="${VERSION:-1.0.0}"
+VERSION="${VERSION:-2.1.0}"
 BUILD_NUMBER="${BUILD_NUMBER:-$(date +%Y%m%d%H%M)}"
-SIGN_IDENTITY="${SIGN_IDENTITY:--}"   # "-" = ad-hoc; or "Developer ID Application: ..."
 APP="$ROOT/build/$APP_NAME.app"
+
+# Signing: SIGN_IDENTITY when it is set ("-" = ad-hoc, or "Developer ID Application: ..."), otherwise the app's own
+# certificate "tihomirov-nick" when it is in the Keychain, otherwise ad-hoc. With that certificate every build has the
+# same designated requirement, so permissions survive new versions and installed copies can update themselves (README).
+APP_CERT="tihomirov-nick"
+if [ -z "${SIGN_IDENTITY:-}" ]; then
+    if security find-identity -p codesigning 2>/dev/null | grep -q "\"$APP_CERT\""; then
+        SIGN_IDENTITY="$APP_CERT"
+    else
+        SIGN_IDENTITY="-"
+    fi
+fi
 
 # 1. Dependencies
 [ -f Vendor/whisper/lib/libwhisper_all.a ] || ./scripts/build_whisper.sh
 [ -x Vendor/ffmpeg/ffmpeg ] || ./scripts/fetch_ffmpeg.sh
-[ -f Resources/AppIcon.icns ] || swift scripts/make_icon.swift
 
 # 2. Compile (universal binary)
 echo "==> swift build (arm64 + x86_64)"
@@ -43,7 +53,15 @@ mv "$APP/Contents/MacOS/$APP_NAME.sdk" "$APP/Contents/MacOS/$APP_NAME"
 chmod +x "$APP/Contents/MacOS/$APP_NAME"
 echo "    macOS $MIN_OS+, SDK $SDK_VERSION"
 cp Vendor/ffmpeg/ffmpeg "$APP/Contents/Helpers/ffmpeg"
-cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+
+# Icon: Resources/AppIcon.icon in the Icon Composer format, made by scripts/make_icon.swift (flat: a solid fill and the
+# white mark, no glass, shadow or translucency). actool turns it into Assets.car, which macOS 26 shows without the grey
+# plate it puts around plain .icns icons, and AppIcon.icns for older systems.
+[ -d Resources/AppIcon.icon ] || swift scripts/make_icon.swift
+xcrun actool "$ROOT/Resources/AppIcon.icon" --compile "$APP/Contents/Resources" \
+    --platform macosx --minimum-deployment-target 13.3 --app-icon AppIcon \
+    --output-partial-info-plist "$ROOT/build/icon-partial.plist" --output-format human-readable-text >/dev/null
+[ -f "$APP/Contents/Resources/Assets.car" ] && [ -f "$APP/Contents/Resources/AppIcon.icns" ] || { echo "icon compilation failed"; exit 1; }
 
 # Fonts shipped with the app (put licensed .otf/.ttf files into Fonts/)
 font_count=0
@@ -82,6 +100,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleLocalizations</key><array><string>en</string><string>ru</string></array>
     <key>CFBundleExecutable</key><string>$APP_NAME</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>CFBundleIconName</key><string>AppIcon</string>
     <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
     <key>CFBundleName</key><string>$APP_NAME</string>
@@ -132,10 +151,15 @@ xattr -cr "$APP"
 if [ "$SIGN_IDENTITY" = "-" ]; then
     codesign --force --sign - "$APP/Contents/Helpers/ffmpeg"
     codesign --force --sign - "$APP"
+elif [ "$SIGN_IDENTITY" = "$APP_CERT" ]; then
+    # Self-signed: Apple's timestamp service and notarization are not for it, so no hardened runtime either.
+    codesign --force --timestamp=none --sign "$APP_CERT" "$APP/Contents/Helpers/ffmpeg"
+    codesign --force --timestamp=none --sign "$APP_CERT" "$APP"
 else
     codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP/Contents/Helpers/ffmpeg"
     codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP"
 fi
 codesign --verify --deep --strict "$APP"
+echo "    $(codesign -d -r- "$APP" 2>&1 | sed -n 's/^designated => /requirement: /p')"
 echo "==> done: $APP ($(du -sh "$APP" | cut -f1))"
 lipo -info "$APP/Contents/MacOS/$APP_NAME"

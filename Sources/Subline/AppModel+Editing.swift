@@ -209,18 +209,19 @@ extension AppModel {
         registerCuesUndo(L("Изменение стиля"))
     }
 
-    /// Applies `change` to the overrides of every target of the scope.
-    func modifyOverrides(_ change: (inout StyleOverride) -> Void) {
+    /// Applies `change` to the overrides of every target of the scope. False when the scope has no target.
+    @discardableResult
+    func modifyOverrides(_ change: (inout StyleOverride) -> Void) -> Bool {
         switch scope {
         case .all:
-            return
+            return false
         case .group(let id):
-            guard let index = groups.firstIndex(where: { $0.id == id }) else { return }
+            guard let index = groups.firstIndex(where: { $0.id == id }) else { return false }
             registerStyleUndo()
             change(&groups[index].style)
         case .cues:
             let ids = Set(scopeCueIDs)
-            guard !ids.isEmpty else { return }
+            guard !ids.isEmpty else { return false }
             registerStyleUndo()
             for index in cues.indices where ids.contains(cues[index].id) {
                 var style = cues[index].style ?? StyleOverride()
@@ -228,7 +229,7 @@ extension AppModel {
                 cues[index].style = style.isEmpty ? nil : style
             }
         case .words:
-            guard let selection = wordSelection, let index = cues.firstIndex(where: { $0.id == selection.cueID }) else { return }
+            guard let selection = wordSelection, let index = cues.firstIndex(where: { $0.id == selection.cueID }) else { return false }
             registerStyleUndo()
             var styles = cues[index].wordStyles ?? [:]
             for word in selection.indices {
@@ -239,6 +240,7 @@ extension AppModel {
             cues[index].wordStyles = styles.isEmpty ? nil : styles
         }
         markEdited()
+        return true
     }
 
     func setStyle<T>(_ presetKey: WritableKeyPath<SubtitlePreset, T>, _ overrideKey: WritableKeyPath<StyleOverride, T?>, _ value: T) {
@@ -287,21 +289,25 @@ extension AppModel {
         case .all: copiedStyle = StyleOverride.capturing(preset)
         default: copiedStyle = StyleOverride.capturing(effectiveStyle)
         }
+        SoundEffects.play(.mark)
     }
 
     func pasteStyle() {
         guard let copied = copiedStyle else { return }
+        let pasted: Bool
         switch scope {
         case .all:
             var updated = copied.applied(to: preset)
             updated.id = preset.id
             updated.name = preset.name
             preset = updated
+            pasted = true
         case .words:
-            modifyOverrides { $0 = $0.merging(copied.wordLevel) }
+            pasted = modifyOverrides { $0 = $0.merging(copied.wordLevel) }
         default:
-            modifyOverrides { $0 = $0.merging(copied) }
+            pasted = modifyOverrides { $0 = $0.merging(copied) }
         }
+        if pasted { SoundEffects.play(.mark) }
     }
 
     // MARK: - Groups
@@ -361,6 +367,7 @@ extension AppModel {
         groups.removeAll { $0.id == id }
         if scope == .group(id) { scope = .all }
         markEdited()
+        SoundEffects.play(.delete)
     }
 
     /// Selects the group's subtitles and edits the group style.

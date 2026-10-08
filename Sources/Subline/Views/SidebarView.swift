@@ -2,10 +2,11 @@ import SwiftUI
 import AppKit
 import SublineCore
 
-/// The left block: speech recognition on top, the subtitles below.
+/// The left block: speech recognition on top, the subtitles below, an update of Subline at the bottom when there is one.
 struct SidebarView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var modelStore: ModelStore
+    @EnvironmentObject var updater: Updater
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -47,8 +48,16 @@ struct SidebarView: View {
                 }
             }
             .frame(maxHeight: .infinity)
+            if updater.state != .idle {
+                UpdateBanner()
+                    .padding(.horizontal, Metrics.inset)
+                    .padding(.top, 4)
+                    .padding(.bottom, Metrics.inset)
+                    .transition(.reveal(reduceMotion: reduceMotion))
+            }
         }
         .animation(Motion.animation(Motion.island, reduceMotion: reduceMotion), value: modelStore.hasAnyModel)
+        .animation(Motion.animation(Motion.island, reduceMotion: reduceMotion), value: updater.state == .idle)
         .animation(Motion.animation(Motion.island, reduceMotion: reduceMotion), value: model.needsRebuild)
         .animation(Motion.animation(Motion.island, reduceMotion: reduceMotion), value: model.cues.isEmpty)
     }
@@ -100,7 +109,7 @@ private struct RecognitionPanel: View {
                         .frame(maxWidth: .infinity)
                 }
                 .appButton(.primary)
-                .disabled(model.media == nil || model.isBusy)
+                .disabled(model.media == nil || model.isBusy || model.updateInProgress)
                 .help(buttonHelp)
                 Button(L("Модели")) {
                     model.showModelManager = true
@@ -127,6 +136,7 @@ private struct RecognitionPanel: View {
     }
 
     private var buttonHelp: String {
+        if model.updateInProgress { return L("Сейчас ставится обновление, Subline скоро перезапустится") }
         if model.transcriptFromCache, let transcript = model.transcript {
             return L("Открыта сохраненная расшифровка (%@). Нажмите, чтобы распознать речь заново", "\(transcript.modelName)")
         }
@@ -273,6 +283,7 @@ private struct RebuildBanner: View {
 
 private struct EmptyState: View {
     @EnvironmentObject var model: AppModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let transcribing = model.activity?.kind == .transcribing
@@ -292,13 +303,13 @@ private struct EmptyState: View {
 
     @ViewBuilder
     private func symbol(_ transcribing: Bool) -> some View {
-        let image = Image(systemName: transcribing ? "waveform" : "captions.bubble")
-            .font(.system(size: 21, weight: .medium))
-            .foregroundStyle(transcribing ? Color.white : Palette.secondary)
-        if #available(macOS 14.0, *) {
-            image.symbolEffect(.variableColor.iterative, isActive: transcribing)
+        if transcribing {
+            RecognitionWave(animated: !reduceMotion)
+                .frame(width: 24, height: 19)
         } else {
-            image
+            Image(systemName: "captions.bubble")
+                .font(.system(size: 21, weight: .medium))
+                .foregroundStyle(Palette.secondary)
         }
     }
 
@@ -307,6 +318,85 @@ private struct EmptyState: View {
         if model.mediaURL == nil { return L("Откройте видео") }
         if model.transcript != nil { return L("Речь не найдена") }
         return L("Нажмите «Распознать речь»")
+    }
+}
+
+/// The waveform while speech is recognized: its bars brighten one after another. Core Animation plays this outside the
+/// app, so it costs nothing per frame; a SwiftUI animation (or the system's variable color effect) would redraw the
+/// whole window at the display rate and take most of a core away from Whisper. Still with Reduce Motion.
+private struct RecognitionWave: NSViewRepresentable {
+    var animated: Bool
+
+    func makeNSView(context: Context) -> WaveView {
+        WaveView()
+    }
+
+    func updateNSView(_ view: WaveView, context: Context) {
+        view.animated = animated
+    }
+
+    final class WaveView: NSView {
+        /// Heights of the bars, in points, like the waveform symbol.
+        private static let heights: [CGFloat] = [6, 11, 17, 9, 14, 8, 5]
+        private static let barWidth: CGFloat = 2
+        private static let gap: CGFloat = 1.67
+        private var bars: [CALayer] = []
+
+        var animated = false {
+            didSet { if animated != oldValue { animate() } }
+        }
+
+        override init(frame: NSRect) {
+            super.init(frame: frame)
+            wantsLayer = true
+            bars = Self.heights.map { _ in
+                let bar = CALayer()
+                bar.backgroundColor = NSColor.white.cgColor
+                bar.cornerRadius = Self.barWidth / 2
+                layer?.addSublayer(bar)
+                return bar
+            }
+        }
+
+        required init?(coder: NSCoder) {
+            fatalError("init(coder:) is not used")
+        }
+
+        override func layout() {
+            super.layout()
+            let total = CGFloat(bars.count) * Self.barWidth + CGFloat(bars.count - 1) * Self.gap
+            var x = (bounds.width - total) / 2
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            for (bar, height) in zip(bars, Self.heights) {
+                bar.frame = CGRect(x: x, y: (bounds.height - height) / 2, width: Self.barWidth, height: height)
+                x += Self.barWidth + Self.gap
+            }
+            CATransaction.commit()
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            animate()
+        }
+
+        private func animate() {
+            bars.forEach { $0.removeAllAnimations() }
+            guard animated, window != nil else { return }
+            let start = CACurrentMediaTime()
+            for (index, bar) in bars.enumerated() {
+                let pulse = CABasicAnimation(keyPath: "opacity")
+                pulse.fromValue = 1
+                pulse.toValue = 0.3
+                pulse.duration = 0.5
+                pulse.autoreverses = true
+                pulse.repeatCount = .infinity
+                pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                pulse.beginTime = start + Double(index) * 0.11
+                pulse.fillMode = .backwards
+                bar.add(pulse, forKey: "pulse")
+            }
+        }
     }
 }
 

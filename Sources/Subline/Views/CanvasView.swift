@@ -409,15 +409,20 @@ struct StatusHUD: View {
     }
 }
 
-/// A black capsule over the video.
+/// A black capsule over the video, 40 pt high. A round icon or button at an end is concentric with the rounded end:
+/// as far from the side as from the top and bottom. Text and spinners keep more room.
 struct Pill<Content: View>: View {
+    /// The space before the first item and after the last one.
+    var leading: CGFloat = 14
+    var trailing: CGFloat = 14
     @ViewBuilder var content: Content
 
     var body: some View {
         HStack(spacing: 10) {
             content
         }
-        .padding(.horizontal, 14)
+        .padding(.leading, leading)
+        .padding(.trailing, trailing)
         .frame(minHeight: 40)
         .background(Capsule().fill(Color.black))
         .overlay(Capsule().strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
@@ -430,7 +435,8 @@ private struct ActivityPill: View {
     let activity: Activity
 
     var body: some View {
-        Pill {
+        // The 26 pt icon is 7 pt from the edges of the capsule, the 24 pt × is 8 pt.
+        Pill(leading: 7, trailing: activity.kind == .opening ? 14 : 8) {
             Image(systemName: icon)
                 .font(.system(size: 11.5, weight: .bold))
                 .foregroundStyle(.black)
@@ -473,7 +479,7 @@ private struct NoticePill: View {
     let notice: ExportNotice
 
     var body: some View {
-        Pill {
+        Pill(leading: 7, trailing: 8) {
             Image(systemName: "checkmark")
                 .font(.system(size: 11.5, weight: .bold))
                 .foregroundStyle(.black)

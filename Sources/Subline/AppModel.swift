@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 import UniformTypeIdentifiers
 import ImageIO
 import SublineCore
@@ -60,6 +61,8 @@ final class CancelFlag: @unchecked Sendable {
 @MainActor
 final class AppModel: ObservableObject {
     let modelStore: ModelStore
+    let updater: Updater
+    let menuBarIcon: MenuBarIcon
     let fontStore = FontStore()
     let player = PlayerController()
     private let keyboard = KeyboardController()
@@ -123,14 +126,21 @@ final class AppModel: ObservableObject {
 
     // MARK: Window state
 
-    @Published private(set) var activity: Activity?
-    @Published var errorMessage: String?
+    @Published private(set) var activity: Activity? {
+        didSet { menuBarIcon.show(activity) }
+    }
+    /// Shown in an alert, which comes with the failure sound.
+    @Published var errorMessage: String? {
+        didSet { if errorMessage != nil { SoundEffects.play(.failure) } }
+    }
     @Published var exportNotice: ExportNotice?
     @Published var showModelManager = false
     @Published var showInspector: Bool { didSet { defaults.set(showInspector, forKey: "showInspector") } }
     @Published var inspectorTab: InspectorTab = .text
     @Published var showFontLibrary = false
     @Published var fontsVersion = 0
+    /// An update is being downloaded or installed: Subline restarts soon, so recognition and export wait.
+    @Published private(set) var updateInProgress = false
 
     /// The window's undo manager (set by the main view).
     weak var undoManager: UndoManager?
@@ -147,6 +157,7 @@ final class AppModel: ObservableObject {
     private var pendingCacheSave: (entry: TranscriptCache.Entry, url: URL)?
     private var rebuildTask: Task<Void, Never>?
     private var noticeTask: Task<Void, Never>?
+    private var updateWatch: AnyCancellable?
 
     init() {
         WhisperEngine.setLoggingEnabled(false)
@@ -158,6 +169,8 @@ final class AppModel: ObservableObject {
         Task.detached(priority: .utility) { WhisperEngine.warmUp() }
 
         modelStore = ModelStore()
+        updater = Updater(repo: DebugHooks.updateRepo, apiBase: DebugHooks.updateAPI)
+        menuBarIcon = MenuBarIcon()
         let loaded = PresetStore.load()
         presets = loaded
         let savedPreset = defaults.string(forKey: "selectedPreset").flatMap(UUID.init(uuidString:))
@@ -186,6 +199,16 @@ final class AppModel: ObservableObject {
         keyboard.install { [weak self] command in
             self?.handle(command) ?? false
         }
+        updateWatch = updater.$state.sink { [weak self] state in
+            guard let self else { return }
+            // An update that broke off sounds like any failure; finding one is silent.
+            if case .failed = state, self.updateInProgress { SoundEffects.play(.failure) }
+            switch state {
+            case .downloading, .installing: self.updateInProgress = true
+            default: self.updateInProgress = false
+            }
+        }
+        updater.start()
     }
 
     // MARK: - Presets
@@ -237,6 +260,7 @@ final class AppModel: ObservableObject {
         guard presets.count > 1, let index = presets.firstIndex(where: { $0.id == selectedPresetID }) else { return }
         presets.remove(at: index)
         selectedPresetID = presets[min(index, presets.count - 1)].id
+        SoundEffects.play(.delete)
     }
 
     func restoreBuiltInPresets() {
@@ -252,6 +276,7 @@ final class AppModel: ObservableObject {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             try PresetStore.export(all ? presets : [preset], to: url)
+            SoundEffects.play(.send)
         } catch {
             errorMessage = L("Не удалось сохранить пресет: %@", "\(error.localizedDescription)")
         }
@@ -278,6 +303,8 @@ final class AppModel: ObservableObject {
         selectedPresetID = imported.last!.id
         if let missing = imported.map(\.fontFamily).first(where: { !FontLibrary.isAvailable(family: $0) }) {
             errorMessage = L("В пресете указан шрифт «%@», а на этом Mac его нет. Добавьте файлы шрифта через пункт «Добавить файлы шрифтов…» в меню «Стиль»", "\(missing)")
+        } else if errorMessage == nil {
+            SoundEffects.play(.mark)
         }
     }
 
@@ -606,7 +633,7 @@ final class AppModel: ObservableObject {
     // MARK: - Transcription
 
     func startTranscription() {
-        guard let url = mediaURL, let info = media, !isBusy else { return }
+        guard let url = mediaURL, let info = media, !isBusy, !updateInProgress else { return }
         guard info.hasAudio else {
             errorMessage = MediaError.noAudio.localizedDescription
             return
@@ -618,6 +645,7 @@ final class AppModel: ObservableObject {
         workTask?.cancel()
         exportNotice = nil
         activity = Activity(kind: .transcribing, title: L("Извлекаю звук"), progress: 0)
+        SoundEffects.play(.start)
 
         let options = WhisperOptions(modelPath: modelURL.path, language: language, prompt: prompt)
         let modelID = self.modelID
@@ -657,13 +685,19 @@ final class AppModel: ObservableObject {
                 self.transcript = transcript
                 self.transcriptFromCache = false
                 self.rebuildCues()
+                self.menuBarIcon.finish(transcript.segments.isEmpty ? .failure : .success)
                 self.activity = nil
                 if transcript.segments.isEmpty {
                     self.errorMessage = L("Речь не распознана. Проверьте язык распознавания или попробуйте другую модель")
+                } else {
+                    SoundEffects.play(.success)
                 }
             } catch {
                 guard let self else { return }
-                if self.activity?.kind == .transcribing { self.activity = nil }
+                if self.activity?.kind == .transcribing {
+                    if !Self.isCancellation(error) { self.menuBarIcon.finish(.failure) }
+                    self.activity = nil
+                }
                 if !Self.isCancellation(error) {
                     self.errorMessage = error.localizedDescription
                 }
@@ -747,6 +781,7 @@ final class AppModel: ObservableObject {
         registerCuesUndo(L("Удаление субтитра"))
         cues.removeAll { $0.id == id }
         markEdited()
+        SoundEffects.play(.delete)
     }
 
     func mergeWithNext(_ id: UUID) {
@@ -898,7 +933,7 @@ final class AppModel: ObservableObject {
     // MARK: - Export
 
     func export(_ format: ExportFormat) {
-        guard let info = media, let url = mediaURL, !isBusy else { return }
+        guard let info = media, let url = mediaURL, !isBusy, !updateInProgress else { return }
         guard !cues.isEmpty else {
             errorMessage = L("Субтитров пока нет. Сначала распознайте речь")
             return
@@ -931,6 +966,7 @@ final class AppModel: ObservableObject {
             do {
                 try Exporter.srt(cues: cues, renderer: renderer).write(to: output, atomically: true, encoding: .utf8)
                 showNotice(output)
+                SoundEffects.play(.send)
             } catch {
                 errorMessage = L("Не удалось сохранить SRT: %@", "\(error.localizedDescription)")
             }
@@ -940,6 +976,7 @@ final class AppModel: ObservableObject {
         workTask?.cancel()
         exportNotice = nil
         activity = Activity(kind: .exporting, title: L("Готовлю субтитры"), progress: 0)
+        SoundEffects.play(.start)
         workTask = Task { [weak self] in
             let job = Task.detached(priority: .userInitiated) {
                 try await Exporter.exportVideo(info: info, cues: cues, groups: groups, preset: preset, format: format, output: output) { stage, value in
@@ -953,11 +990,13 @@ final class AppModel: ObservableObject {
                     job.cancel()
                 }
                 guard let self else { return }
+                self.menuBarIcon.finish(.success)
                 self.activity = nil
                 self.showNotice(output)
-                NSSound(named: "Glass")?.play()
+                SoundEffects.play(.success)
             } catch {
                 guard let self else { return }
+                if !Self.isCancellation(error) { self.menuBarIcon.finish(.failure) }
                 self.activity = nil
                 if !Self.isCancellation(error) {
                     self.errorMessage = error.localizedDescription

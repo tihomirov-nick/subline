@@ -1,6 +1,7 @@
 #!/bin/bash
-# Publishes a GitHub release: builds dist/Subline-<version>.dmg from the committed code, tags v<version>,
-# pushes main and the tag, then publishes the release with the DMG attached.
+# Publishes a GitHub release: builds dist/Subline-<version>.dmg from the committed code, checks that the app in it is
+# signed with "tihomirov-nick" (installed copies update only to such an app), tags v<version>, pushes main and the tag,
+# then publishes the release with the DMG attached. Installed copies find it by themselves (README, "Обновления").
 #   VERSION=1.5.0 NOTES=~/notes-1.5.0.md ./scripts/release.sh     (keep the notes file outside the repo)
 # git goes through the remote's deploy key (git@github-subline:..., see ~/.ssh/config). The release API needs a
 # fine-grained token of tihomirov-nick with Contents: Read and write on this repo, kept in the Keychain
@@ -47,11 +48,14 @@ fi
 VERSION="$VERSION" ./scripts/make_dmg.sh
 [ -z "$(git status --porcelain)" ] || { echo "the build changed tracked files, commit them and run again:"; git status --short; exit 1; }
 
-# 4. Tag and push
+# 4. Installed copies replace themselves only with an app signed by the same certificate
+./scripts/verify_dmg.sh "$DMG" || { echo "not published: the DMG would not update installed copies"; exit 1; }
+
+# 5. Tag and push
 git rev-parse -q --verify "refs/tags/$TAG" >/dev/null || git tag -a "$TAG" -m "Subline $VERSION"
 git push origin main "$TAG"
 
-# 5. Attach the DMG and publish
+# 6. Attach the DMG and publish
 gh_ release upload "$TAG" "$DMG" --repo "$REPO" --clobber
 gh_ release edit "$TAG" --repo "$REPO" --draft=false --title "Subline $VERSION" --notes-file "$NOTES"
 echo "==> https://github.com/$REPO/releases/tag/$TAG"

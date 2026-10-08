@@ -5,3 +5,5 @@ Vendor/
 *.dmg
 .DS_Store
 TestMedia/
+# Built from Resources/AppIcon.icon by actool into the app
+Resources/AppIcon.icns

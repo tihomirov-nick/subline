@@ -1109,20 +1109,68 @@ struct ProgressLine: View {
                         .fill(Brand.mark)
                         .frame(width: max(4, geometry.size.width * CGFloat(min(1, max(0, value)))))
                 } else {
-                    TimelineView(.animation) { context in
-                        let phase = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.4) / 1.4
-                        let piece = geometry.size.width * 0.3
-                        Capsule()
-                            .fill(Brand.mark)
-                            .frame(width: piece)
-                            .offset(x: (geometry.size.width + piece) * CGFloat(phase) - piece)
-                    }
-                    .clipShape(Capsule())
+                    RunningPiece()
                 }
             }
         }
         .frame(height: 4)
         .animation(.easeOut(duration: 0.2), value: value)
+    }
+}
+
+/// The piece that runs along a progress line without a value. Core Animation moves it outside the app, so it costs
+/// nothing per frame; a SwiftUI animation would redraw the whole window every frame and take a tenth of a core away
+/// from long work.
+private struct RunningPiece: NSViewRepresentable {
+    func makeNSView(context: Context) -> PieceView {
+        PieceView()
+    }
+
+    func updateNSView(_ view: PieceView, context: Context) {}
+
+    final class PieceView: NSView {
+        private let piece = CALayer()
+
+        override init(frame: NSRect) {
+            super.init(frame: frame)
+            wantsLayer = true
+            layer?.masksToBounds = true
+            piece.backgroundColor = NSColor(Brand.mark).cgColor
+            layer?.addSublayer(piece)
+        }
+
+        required init?(coder: NSCoder) {
+            fatalError("init(coder:) is not used")
+        }
+
+        override func layout() {
+            super.layout()
+            layer?.cornerRadius = bounds.height / 2
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            piece.frame = CGRect(x: 0, y: 0, width: bounds.width * 0.3, height: bounds.height)
+            piece.cornerRadius = bounds.height / 2
+            CATransaction.commit()
+            run()
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            run()
+        }
+
+        /// From just outside the left end to just outside the right end in 1.4 s, again and again.
+        private func run() {
+            piece.removeAllAnimations()
+            guard window != nil, bounds.width > 0 else { return }
+            let width = piece.bounds.width
+            let slide = CABasicAnimation(keyPath: "position.x")
+            slide.fromValue = -width / 2
+            slide.toValue = bounds.width + width / 2
+            slide.duration = 1.4
+            slide.repeatCount = .infinity
+            piece.add(slide, forKey: "run")
+        }
     }
 }
 

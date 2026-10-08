@@ -19,6 +19,7 @@ struct SublineApp: App {
                 .environmentObject(model)
                 .environmentObject(model.modelStore)
                 .environmentObject(model.fontStore)
+                .environmentObject(model.updater)
                 .frame(minWidth: 1100, minHeight: 680)
                 .modifier(DebugActiveState())
                 .onAppear {
@@ -29,6 +30,9 @@ struct SublineApp: App {
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1400, height: 860)
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button(L("Проверить обновления…")) { model.updater.check(userInitiated: true) }
+            }
             CommandGroup(replacing: .appTermination) {
                 Button(L("Завершить Subline")) { AppDelegate.quit(model) }
                     .keyboardShortcut("q", modifiers: .command)
@@ -41,11 +45,11 @@ struct SublineApp: App {
             CommandGroup(after: .newItem) {
                 Button(L("Сохранить видео с субтитрами…")) { model.export(model.hasVideo ? .mp4H264 : .srt) }
                     .keyboardShortcut("e", modifiers: .command)
-                    .disabled(model.cues.isEmpty || model.isBusy)
+                    .disabled(model.cues.isEmpty || model.isBusy || model.updateInProgress)
                 Menu(L("Экспорт в формате")) {
                     ForEach(ExportFormat.allCases) { format in
                         Button(format.title) { model.export(format) }
-                            .disabled(model.cues.isEmpty || model.isBusy || (format.needsVideo && !model.hasVideo))
+                            .disabled(model.cues.isEmpty || model.isBusy || model.updateInProgress || (format.needsVideo && !model.hasVideo))
                     }
                 }
                 Divider()
@@ -99,7 +103,7 @@ struct SublineApp: App {
             CommandMenu(L("Субтитры")) {
                 Button(L("Распознать речь")) { model.startTranscription() }
                     .keyboardShortcut("r", modifiers: .command)
-                    .disabled(model.media == nil || model.isBusy)
+                    .disabled(model.media == nil || model.isBusy || model.updateInProgress)
                 Button(L("Пересобрать по пресету")) { model.rebuildCues() }
                     .disabled(model.transcript == nil || model.isBusy)
                 Button(L("Разделить субтитр по курсору")) { model.splitCurrentCue() }
@@ -112,6 +116,7 @@ struct SublineApp: App {
 
         Settings {
             SettingsView()
+                .environmentObject(model.updater)
         }
         .windowResizability(.contentSize)
     }
@@ -206,9 +211,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 ///   SUBLINE_ACTIONS="5:select-cue-2;6:open-models"  run actions after N seconds
 ///   SUBLINE_QUIT_AFTER=<seconds>
 ///   SUBLINE_FORCE_ACTIVE=1                     draw the window as active while it stays in the background
+///   SUBLINE_SOUND_LOG=<file>                   write down every sound effect and the file it came from
+///   SUBLINE_UPDATE_API=<url> SUBLINE_UPDATE_REPO=<owner/repo>   look for updates there instead of GitHub
 @MainActor
 enum DebugHooks {
     static weak var model: AppModel?
+    static let updateRepo = ProcessInfo.processInfo.environment["SUBLINE_UPDATE_REPO"] ?? "tihomirov-nick/subline"
+    static let updateAPI = ProcessInfo.processInfo.environment["SUBLINE_UPDATE_API"].flatMap(URL.init(string:))
+        ?? URL(string: "https://api.github.com")!
     /// SwiftUI's own way to open Settings (macOS 14 and later), registered by the main window.
     static var openSettings: (() -> Void)?
     static let forceActive = ProcessInfo.processInfo.environment["SUBLINE_FORCE_ACTIVE"] != nil
@@ -231,6 +241,15 @@ enum DebugHooks {
         }
         if let quit = env["SUBLINE_QUIT_AFTER"].flatMap(Double.init) {
             DispatchQueue.main.asyncAfter(deadline: .now() + quit) { MainActor.assumeIsolated { AppDelegate.quit(model) } }
+        }
+        if let path = env["SUBLINE_SOUND_LOG"] {
+            FileManager.default.createFile(atPath: path, contents: nil)
+            SoundEffects.observer = { event, source in
+                guard let file = FileHandle(forWritingAtPath: path) else { return }
+                file.seekToEndOfFile()
+                file.write(Data("\(event) \(source)\n".utf8))
+                try? file.close()
+            }
         }
     }
 
@@ -309,7 +328,7 @@ enum DebugHooks {
             showStandalone(ModelManagerView().environmentObject(model).environmentObject(model.modelStore),
                            size: CGSize(width: 720, height: 620))
         case "window-settings":
-            showStandalone(SettingsView(), size: CGSize(width: 380, height: 90))
+            showStandalone(SettingsView().environmentObject(model.updater), size: CGSize(width: 380, height: 260))
         case "window-library":
             showStandalone(FontLibraryView().environmentObject(model).environmentObject(model.fontStore),
                            size: CGSize(width: 820, height: 680))
@@ -340,7 +359,7 @@ enum DebugHooks {
             // render-parts=<dir>: sidebar, canvas and inspector separately at a fixed height
             if parts.count > 1 {
                 let dir = parts[1]
-                renderOffscreen(SidebarView().environmentObject(model).environmentObject(model.modelStore),
+                renderOffscreen(SidebarView().environmentObject(model).environmentObject(model.modelStore).environmentObject(model.updater),
                                 size: CGSize(width: 320, height: 860), to: dir + "/part_sidebar.png")
                 renderOffscreen(CanvasArea(player: model.player).environmentObject(model),
                                 size: CGSize(width: 780, height: 860), to: dir + "/part_canvas.png")
@@ -475,11 +494,27 @@ enum DebugHooks {
             }
         case "group": model.createGroup()
         case "fake-activity":
-            // fake-activity=<title>|<progress or ->
+            // fake-activity=<title>|<progress or ->[|opening or exporting]
             if parts.count > 1 {
-                let args = parts[1].split(separator: "|", maxSplits: 1).map(String.init)
-                model.debugShowActivity(.transcribing, title: args[0], progress: args.count > 1 ? Double(args[1]) : nil)
+                let args = parts[1].split(separator: "|", maxSplits: 2).map(String.init)
+                let kind: Activity.Kind = args.count < 3 ? .transcribing : args[2] == "opening" ? .opening : .exporting
+                model.debugShowActivity(kind, title: args[0], progress: args.count > 1 ? Double(args[1]) : nil)
             }
+        case "render-menubar":
+            // render-menubar=<dir>: every face of the menu bar icon
+            if parts.count > 1 { MenuBarIcon.renderFaces(to: URL(fileURLWithPath: parts[1])) }
+        case "menubar-display":
+            // menubar-display=sleep|wake: what the icon hears when the display sleeps (only inside Subline)
+            let name = parts.count > 1 && parts[1] == "wake" ? NSWorkspace.screensDidWakeNotification : NSWorkspace.screensDidSleepNotification
+            NSWorkspace.shared.notificationCenter.post(name: name, object: NSWorkspace.shared)
+        case "menubar-finish":
+            // menubar-finish=success|failure: ends a fake activity the way real work ends
+            model.menuBarIcon.finish(parts.count > 1 && parts[1] == "failure" ? .failure : .success)
+            model.cancelActivity()
+        case "update-check": model.updater.check(userInitiated: true)
+        case "update-install": model.updater.install()
+        case "update-cancel": model.updater.cancel()
+        case "update-dismiss": model.updater.dismiss()
         case "copy-style": model.copyStyle()
         case "paste-style": model.pasteStyle()
         case "library": model.showFontLibrary = true
@@ -501,7 +536,11 @@ enum DebugHooks {
                                 size: CGSize(width: 720, height: 620), to: parts[1])
             }
         case "export":
-            if parts.count > 1 { model.exportForTesting(.mp4H264, to: URL(fileURLWithPath: parts[1])) }
+            // export=<file>: a video in MP4 (H.264), or subtitles when the file ends in .srt
+            if parts.count > 1 {
+                let url = URL(fileURLWithPath: parts[1])
+                model.exportForTesting(url.pathExtension == "srt" ? .srt : .mp4H264, to: url)
+            }
         default: break
         }
     }

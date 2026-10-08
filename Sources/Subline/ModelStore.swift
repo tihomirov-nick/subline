@@ -77,6 +77,7 @@ final class ModelStore: NSObject, ObservableObject {
         attempts[model.id] = 0
         downloads[model.id] = DownloadState(received: 0, total: model.sizeBytes)
         startTask(model.id, resumeData: nil)
+        SoundEffects.play(.start)
     }
 
     private func startTask(_ id: String, resumeData: Data?) {
@@ -115,11 +116,13 @@ final class ModelStore: NSObject, ObservableObject {
     func delete(_ model: WhisperModelInfo) {
         try? FileManager.default.removeItem(at: model.localURL)
         refresh()
+        SoundEffects.play(.delete)
     }
 
     func deleteCustom(_ url: URL) {
         try? FileManager.default.removeItem(at: url)
         refresh()
+        SoundEffects.play(.delete)
     }
 
     /// Copies a user-provided ggml model (.bin) into the models folder.
@@ -134,9 +137,13 @@ final class ModelStore: NSObject, ObservableObject {
                 await MainActor.run {
                     self.refresh()
                     self.onInstalled?("custom:" + destination.lastPathComponent)
+                    SoundEffects.play(.mark)
                 }
             } catch {
-                await MainActor.run { self.lastError = L("Не удалось добавить модель: %@", "\(error.localizedDescription)") }
+                await MainActor.run {
+                    self.lastError = L("Не удалось добавить модель: %@", "\(error.localizedDescription)")
+                    SoundEffects.play(.failure)
+                }
             }
         }
     }
@@ -165,6 +172,7 @@ final class ModelStore: NSObject, ObservableObject {
             if transient, scheduleRetry(id, resumeData: nil, reason: L("Сервер временно недоступен (%@)", "\(statusCode)")) { return }
             downloads[id] = nil
             lastError = L("Не удалось скачать «%@»: %@", "\(model.name)", "\(error ?? L("ошибка сервера %@", "\(statusCode)"))")
+            SoundEffects.play(.failure)
             return
         }
         downloads[id]?.verifying = true
@@ -194,6 +202,7 @@ final class ModelStore: NSObject, ObservableObject {
                 }
                 self.refresh()
                 if failure == nil { self.onInstalled?(id) }
+                SoundEffects.play(failure == nil ? .success : .failure)
             }
         }
     }
@@ -210,6 +219,7 @@ final class ModelStore: NSObject, ObservableObject {
         downloads[id] = nil
         let name = ModelCatalog.model(id: id)?.name ?? id
         lastError = L("Не удалось скачать «%@»: %@", "\(name)", "\(error.localizedDescription)")
+        SoundEffects.play(.failure)
     }
 
     nonisolated static func sha256(of url: URL) throws -> String {

@@ -119,7 +119,7 @@ private struct TopBar: View {
                                 .item(format.title, enabled: !format.needsVideo || model.hasVideo) { model.export(format) }
                             }
                         })
-                .disabled(model.cues.isEmpty || model.isBusy)
+                .disabled(model.cues.isEmpty || model.isBusy || model.updateInProgress)
             IconButton(symbol: "sidebar.right", help: model.showInspector ? L("Скрыть стиль (⌥⌘I)") : L("Показать стиль (⌥⌘I)"),
                        size: 28, filled: model.showInspector) {
                 withAnimation(Motion.animation(Motion.island, reduceMotion: reduceMotion)) {
