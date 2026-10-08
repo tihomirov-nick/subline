@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds the app and packs it into dist/Subtits-<version>.dmg
+# Builds the app and packs it into dist/Subline-<version>.dmg
 #   VERSION=1.0.0 ./scripts/make_dmg.sh
 set -euo pipefail
 
@@ -11,16 +11,16 @@ export VERSION
 ./scripts/build_app.sh
 
 STAGE="$ROOT/build/dmg"
-DMG="$ROOT/dist/Subtits-$VERSION.dmg"
+DMG="$ROOT/dist/Subline-$VERSION.dmg"
 rm -rf "$STAGE"
 mkdir -p "$STAGE" "$ROOT/dist"
-cp -R "$ROOT/build/Subtits.app" "$STAGE/"
+cp -R "$ROOT/build/Subline.app" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
 cp "$ROOT/docs/Как установить.txt" "$ROOT/docs/How to install.txt" "$STAGE/"
 
 rm -f "$DMG"
 echo "==> creating $DMG"
-hdiutil create -volname "Subtits $VERSION" -srcfolder "$STAGE" -fs HFS+ -format ULFO -ov "$DMG" >/dev/null
+hdiutil create -volname "Subline $VERSION" -srcfolder "$STAGE" -fs HFS+ -format ULFO -ov "$DMG" >/dev/null
 if [ "${SIGN_IDENTITY:--}" != "-" ]; then
     codesign --force --sign "$SIGN_IDENTITY" "$DMG"
 fi

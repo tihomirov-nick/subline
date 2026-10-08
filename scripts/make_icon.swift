@@ -7,7 +7,7 @@
 import AppKit
 
 let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-let iconset = FileManager.default.temporaryDirectory.appendingPathComponent("Subtits.iconset")
+let iconset = FileManager.default.temporaryDirectory.appendingPathComponent("Subline.iconset")
 try? FileManager.default.removeItem(at: iconset)
 try FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)
 

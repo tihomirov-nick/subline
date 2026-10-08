@@ -2,7 +2,7 @@
 """Prints every unique key of L("...") calls in the app and core sources (Swift source form)."""
 import re, glob, json, sys
 keys = []
-for path in sorted(glob.glob("Sources/Subtits/**/*.swift", recursive=True) + glob.glob("Sources/SubtitsCore/*.swift")):
+for path in sorted(glob.glob("Sources/Subline/**/*.swift", recursive=True) + glob.glob("Sources/SublineCore/*.swift")):
     src = open(path).read()
     for m in re.finditer(r'\bL\("((?:[^"\\\n]|\\.)*)"', src):
         k = m.group(1)

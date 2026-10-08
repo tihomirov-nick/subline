@@ -1,13 +1,13 @@
 #!/bin/bash
-# Builds build/Subtits.app (universal: Apple Silicon + Intel).
+# Builds build/Subline.app (universal: Apple Silicon + Intel).
 #   VERSION=1.0.0 ./scripts/build_app.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-APP_NAME="Subtits"
-BUNDLE_ID="${BUNDLE_ID:-com.subtits.app}"
+APP_NAME="Subline"
+BUNDLE_ID="${BUNDLE_ID:-com.subline.app}"
 VERSION="${VERSION:-1.0.0}"
 BUILD_NUMBER="${BUILD_NUMBER:-$(date +%Y%m%d%H%M)}"
 SIGN_IDENTITY="${SIGN_IDENTITY:--}"   # "-" = ad-hoc; or "Developer ID Application: ..."
@@ -61,14 +61,14 @@ cp Resources/en.lproj/Localizable.strings "$APP/Contents/Resources/en.lproj/"
 cat > "$APP/Contents/Resources/en.lproj/InfoPlist.strings" <<STRINGS
 CFBundleDisplayName = "$APP_NAME";
 CFBundleName = "$APP_NAME";
-NSHumanReadableCopyright = "Subtits — automatic subtitles. Speech recognition: whisper.cpp (MIT), video: FFmpeg.";
+NSHumanReadableCopyright = "Subline makes subtitles for videos. Speech recognition: whisper.cpp (MIT), video: FFmpeg";
 "Video" = "Video";
 "Video (other formats)" = "Video (other formats)";
 STRINGS
 cat > "$APP/Contents/Resources/ru.lproj/InfoPlist.strings" <<STRINGS
 CFBundleDisplayName = "$APP_NAME";
 CFBundleName = "$APP_NAME";
-NSHumanReadableCopyright = "Subtits — автоматические субтитры. Распознавание: whisper.cpp (MIT), видео: FFmpeg.";
+NSHumanReadableCopyright = "Subline делает субтитры к видео. Распознавание: whisper.cpp (MIT), видео: FFmpeg";
 "Video" = "Видео";
 "Video (other formats)" = "Видео (другие форматы)";
 STRINGS
@@ -94,7 +94,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
     <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
-    <key>NSHumanReadableCopyright</key><string>Subtits — automatic subtitles. Speech recognition: whisper.cpp (MIT), video: FFmpeg.</string>
+    <key>NSHumanReadableCopyright</key><string>Subline makes subtitles for videos. Speech recognition: whisper.cpp (MIT), video: FFmpeg</string>
     <key>CFBundleDocumentTypes</key>
     <array>
         <dict>

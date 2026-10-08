@@ -39,10 +39,10 @@ public enum WhisperError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .modelNotFound(let path): return L("Файл модели не найден: %@", "\(path)")
-        case .modelLoadFailed(let name): return L("Не удалось загрузить модель «%@». Возможно, файл повреждён, удалите модель и скачайте её заново.", "\(name)")
-        case .failed(let code): return L("Ошибка распознавания (код %@).", "\(code)")
-        case .cancelled: return L("Распознавание отменено.")
-        case .emptyAudio: return L("Звуковая дорожка пустая.")
+        case .modelLoadFailed(let name): return L("Не удалось загрузить модель «%@». Возможно, файл поврежден, удалите модель и скачайте ее заново", "\(name)")
+        case .failed(let code): return L("Ошибка распознавания (код %@)", "\(code)")
+        case .cancelled: return L("Распознавание отменено")
+        case .emptyAudio: return L("Звуковая дорожка пустая")
         }
     }
 }
@@ -233,7 +233,7 @@ public enum WhisperEngine {
 
     /// Alignment heads for DTW word timing, chosen by the model file name.
     static func dtwPreset(forModelAt path: String) -> whisper_alignment_heads_preset {
-        switch ProcessInfo.processInfo.environment["SUBTITS_DTW_HEADS"] {
+        switch ProcessInfo.processInfo.environment["SUBLINE_DTW_HEADS"] {
         case "large-v3": return WHISPER_AHEADS_LARGE_V3
         case "top": return WHISPER_AHEADS_N_TOP_MOST
         default: break

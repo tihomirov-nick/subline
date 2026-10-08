@@ -11,12 +11,12 @@ public enum MediaError: LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .ffmpegNotFound: return L("Не найден встроенный ffmpeg. Переустановите приложение.")
+        case .ffmpegNotFound: return L("Не найден встроенный ffmpeg. Переустановите приложение")
         case .unreadable(let details): return L("Не удалось открыть файл как видео или аудио.\n%@", "\(details)")
-        case .noAudio: return L("В файле нет звуковой дорожки, распознавать нечего.")
-        case .noVideo: return L("В файле нет видеодорожки. Для аудио можно сохранить только SRT.")
+        case .noAudio: return L("В файле нет звуковой дорожки, распознавать нечего")
+        case .noVideo: return L("В файле нет видеодорожки. Для аудио можно сохранить только SRT")
         case .failed(let details): return L("Ошибка ffmpeg:\n%@", "\(details)")
-        case .cancelled: return L("Отменено.")
+        case .cancelled: return L("Отменено")
         }
     }
 }
@@ -308,7 +308,7 @@ public enum FFmpeg {
             try await attempt(0)
         }
         guard FileManager.default.fileExists(atPath: output.path) else {
-            throw MediaError.failed(L("Не удалось получить кадр из видео."))
+            throw MediaError.failed(L("Не удалось получить кадр из видео"))
         }
     }
 
@@ -363,7 +363,7 @@ public enum FFmpeg {
             }
         }
         try? FileManager.default.removeItem(at: output)
-        throw lastError ?? MediaError.failed(L("Не удалось подготовить видео для просмотра."))
+        throw lastError ?? MediaError.failed(L("Не удалось подготовить видео для просмотра"))
     }
 
     // MARK: - Audio for Whisper

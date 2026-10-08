@@ -1,10 +1,10 @@
 #!/bin/bash
-# Publishes a GitHub release: builds dist/Subtits-<version>.dmg from the committed code, tags v<version>,
+# Publishes a GitHub release: builds dist/Subline-<version>.dmg from the committed code, tags v<version>,
 # pushes main and the tag, then publishes the release with the DMG attached.
 #   VERSION=1.5.0 NOTES=~/notes-1.5.0.md ./scripts/release.sh     (keep the notes file outside the repo)
-# git goes through the remote's deploy key (git@github-subtits:..., see ~/.ssh/config). The release API needs a
+# git goes through the remote's deploy key (git@github-subline:..., see ~/.ssh/config). The release API needs a
 # fine-grained token of tihomirov-nick with Contents: Read and write on this repo, kept in the Keychain
-# (account tihomirov-nick, service TOKEN_SERVICE; by default github-subtits-token, then github-mpxtrans-token).
+# (account tihomirov-nick, service TOKEN_SERVICE; by default github-subline-token, then github-mpxtrans-token).
 # gh's own login is a different account and is not used. Without such a token the script stops before the build.
 # Safe to re-run: an existing tag on HEAD and an existing (draft) release are reused.
 set -euo pipefail
@@ -16,10 +16,10 @@ NOTES="$(cd "$(dirname "$NOTES")" && pwd)/$(basename "$NOTES")"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-REPO="tihomirov-nick/subtits"
-SERVICES="${TOKEN_SERVICE:-github-subtits-token github-mpxtrans-token}"
+REPO="tihomirov-nick/subline"
+SERVICES="${TOKEN_SERVICE:-github-subline-token github-mpxtrans-token}"
 TAG="v$VERSION"
-DMG="dist/Subtits-$VERSION.dmg"
+DMG="dist/Subline-$VERSION.dmg"
 
 # 1. The release must match committed code on main
 [ "$(git rev-parse --abbrev-ref HEAD)" = main ] || { echo "switch to main first"; exit 1; }
@@ -36,7 +36,7 @@ done
 [ -n "$TOKEN" ] || { echo "no GitHub token in the Keychain (account tihomirov-nick, tried: $SERVICES)"; exit 1; }
 gh_() { GH_TOKEN="$TOKEN" gh "$@"; }
 if ! gh_ release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-    gh_ release create "$TAG" --repo "$REPO" --draft --title "Subtits $VERSION" --notes-file "$NOTES" >/dev/null || {
+    gh_ release create "$TAG" --repo "$REPO" --draft --title "Subline $VERSION" --notes-file "$NOTES" >/dev/null || {
         echo "the token from Keychain service $service can't create releases in $REPO"
         echo "(it needs Contents: Read and write on this repo; nothing was built or pushed)"
         exit 1
@@ -48,10 +48,10 @@ VERSION="$VERSION" ./scripts/make_dmg.sh
 [ -z "$(git status --porcelain)" ] || { echo "the build changed tracked files, commit them and run again:"; git status --short; exit 1; }
 
 # 4. Tag and push
-git rev-parse -q --verify "refs/tags/$TAG" >/dev/null || git tag -a "$TAG" -m "Subtits $VERSION"
+git rev-parse -q --verify "refs/tags/$TAG" >/dev/null || git tag -a "$TAG" -m "Subline $VERSION"
 git push origin main "$TAG"
 
 # 5. Attach the DMG and publish
 gh_ release upload "$TAG" "$DMG" --repo "$REPO" --clobber
-gh_ release edit "$TAG" --repo "$REPO" --draft=false --title "Subtits $VERSION" --notes-file "$NOTES"
+gh_ release edit "$TAG" --repo "$REPO" --draft=false --title "Subline $VERSION" --notes-file "$NOTES"
 echo "==> https://github.com/$REPO/releases/tag/$TAG"

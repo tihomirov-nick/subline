@@ -1,34 +1,34 @@
 import SwiftUI
 import AppKit
-import SubtitsCore
+import SublineCore
 
-/// Center of the window: the video with live subtitles, the transport and floating status.
+/// The middle block: the video with live subtitles, the transport under it and status pills above it.
 struct CanvasArea: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject var player: PlayerController
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack(alignment: .top) {
-            Color(red: 0.067, green: 0.067, blue: 0.075)
-                .ignoresSafeArea()
-            VStack(spacing: 14) {
+            VStack(spacing: 10) {
                 SubtitleCanvas(player: player)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                if model.hasMedia {
-                    TransportBar(player: player)
-                        .frame(maxWidth: 820)
-                } else {
-                    AspectBar()
+                Group {
+                    if model.hasMedia {
+                        TransportBar(player: player)
+                            .frame(maxWidth: 820)
+                    } else {
+                        AspectBar()
+                    }
                 }
+                .transition(.reveal(reduceMotion: reduceMotion))
             }
-            .padding(.horizontal, 22)
-            .padding(.top, 18)
-            .padding(.bottom, 16)
+            .padding(Metrics.inset)
             StatusHUD(player: player)
-                .padding(.top, 12)
+                .padding(.top, Metrics.inset + 8)
+                .padding(.horizontal, Metrics.inset)
         }
-        // The viewer is a dark media surface in both appearances (like QuickTime), so its controls are dark too.
-        .environment(\.colorScheme, .dark)
+        .animation(Motion.animation(Motion.island, reduceMotion: reduceMotion), value: model.hasMedia)
     }
 }
 
@@ -39,21 +39,15 @@ private struct AspectBar: View {
     var body: some View {
         HStack(spacing: 10) {
             Text(L("Формат превью"))
-                .font(.system(size: 12.5, weight: .medium))
-                .foregroundStyle(.secondary)
-            Picker("", selection: $model.previewAspect) {
-                ForEach(PreviewAspect.allCases) { aspect in
-                    Text(aspect.title).tag(aspect)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Palette.secondary)
+                .lineLimit(1)
+            Segments(selection: $model.previewAspect,
+                     items: PreviewAspect.allCases.map { SegmentItem($0, $0.title) },
+                     large: true)
         }
-        .padding(.leading, 18)
-        .padding(.trailing, 8)
-        .frame(height: 46)
-        .glassSurface(Capsule())
+        .frame(height: 30)
+        .help(L("Пропорции кадра, пока видео не открыто"))
     }
 }
 
@@ -109,15 +103,15 @@ struct SubtitleCanvas: View {
                 }
                 if model.mediaURL == nil {
                     DropPrompt()
+                        .transition(.reveal(reduceMotion: reduceMotion))
                 }
             }
             .frame(width: fitted.width, height: fitted.height)
-            .clipShape(RoundedRectangle(cornerRadius: Look.frameRadius, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: Look.frameRadius, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.08))
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.07))
             )
-            .shadow(color: .black.opacity(0.5), radius: 22, y: 10)
             .contentShape(Rectangle())
             .gesture(pressGesture(scale: scale))
             .onContinuousHover { phase in
@@ -137,8 +131,10 @@ struct SubtitleCanvas: View {
                 .interpolation(.high)
         } else {
             ZStack {
-                LinearGradient(colors: [Color(red: 0.17, green: 0.2, blue: 0.29), Color(red: 0.29, green: 0.23, blue: 0.35)],
-                               startPoint: .topLeading, endPoint: .bottomTrailing)
+                // The graphite of the app icon, lit from above.
+                LinearGradient(colors: [Color(red: 0.2, green: 0.2, blue: 0.23), Color(red: 0.07, green: 0.07, blue: 0.08),
+                                        Color(red: 0.02, green: 0.02, blue: 0.025)],
+                               startPoint: .top, endPoint: .bottom)
                 if model.mediaURL != nil && model.hasVideo {
                     ProgressView().controlSize(.small)
                 } else if model.media != nil {
@@ -222,15 +218,17 @@ struct SubtitleCanvas: View {
                 if editsThisCue && drag == nil {
                     let rect = layout.blockRect.insetBy(dx: -10 / scale, dy: -8 / scale)
                     RoundedRectangle(cornerRadius: 6)
-                        .strokeBorder(Color.accentColor.opacity(0.9), style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+                        .strokeBorder(Color.white.opacity(0.85), style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+                        .shadow(color: .black.opacity(0.5), radius: 1.5)
                         .frame(width: rect.width * scale, height: rect.height * scale)
                         .offset(x: rect.minX * scale, y: rect.minY * scale)
                 }
                 ForEach(layout.words.filter { wordIndices.contains($0.index) }, id: \.index) { word in
                     let rect = word.rect.insetBy(dx: -4 / scale, dy: -3 / scale)
                     RoundedRectangle(cornerRadius: 4)
-                        .fill(Color.accentColor.opacity(0.18))
-                        .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color.accentColor, lineWidth: 1.5))
+                        .fill(Color.white.opacity(0.14))
+                        .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color.white, lineWidth: 1.5))
+                        .shadow(color: .black.opacity(0.5), radius: 1.5)
                         .frame(width: rect.width * scale, height: rect.height * scale)
                         .offset(x: rect.minX * scale, y: rect.minY * scale)
                 }
@@ -267,7 +265,7 @@ struct SubtitleCanvas: View {
         if nowSnapX { x = canvas.width / 2 - context.centerOffset.x }
         if nowSnapY { y = canvas.height / 2 - context.centerOffset.y }
         if (nowSnapX && !snapX) || (nowSnapY && !snapY) {
-            NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+            Haptics.tap()
         }
         snapX = nowSnapX
         snapY = nowSnapY
@@ -330,45 +328,44 @@ struct SubtitleCanvas: View {
     }
 }
 
+/// Before a video is opened: what to do, in the middle of the frame.
 private struct DropPrompt: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
         VStack(spacing: 8) {
             Image(systemName: "film.stack")
-                .font(.system(size: 26, weight: .medium))
+                .font(.system(size: 22, weight: .medium))
                 .foregroundStyle(.white)
-                .frame(width: 58, height: 58)
+                .frame(width: 52, height: 52)
                 .background(Circle().fill(Color.white.opacity(0.12)))
-                .padding(.bottom, 4)
+                .padding(.bottom, 2)
             Text(L("Перетащите видео"))
-                .font(.system(size: 19, weight: .bold))
-            Text(L("MP4, MOV, MKV, AVI, WEBM и другие форматы"))
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-            Button {
+                .font(.system(size: 16, weight: .semibold))
+                .lineLimit(1)
+            Text(L("MP4, MOV, MKV, AVI, WEBM и другие"))
+                .font(.system(size: 11.5))
+                .foregroundStyle(Palette.secondary)
+                .lineLimit(1)
+            Button(L("Выбрать файл")) {
                 model.showOpenPanel()
-            } label: {
-                Label(L("Выбрать файл…"), systemImage: "folder")
-                    .font(.system(size: 13, weight: .semibold))
-                    .padding(.horizontal, 6)
             }
-            .glassProminentButton()
-            .controlSize(.large)
+            .appButton(.primary)
             .keyboardShortcut(.defaultAction)
-            .padding(.top, 8)
+            .padding(.top, 6)
         }
-        .padding(.horizontal, 30)
-        .padding(.vertical, 26)
-        .glassSurface(RoundedRectangle(cornerRadius: 28, style: .continuous))
-        .padding(24)
+        .padding(.horizontal, 22)
+        .padding(.top, 18)
+        .padding(.bottom, 16)
+        .background(RoundedRectangle(cornerRadius: 24, style: .continuous).fill(Color.black.opacity(0.78)))
+        .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(Color.white.opacity(0.08)))
+        .padding(Metrics.inset)
     }
 }
 
 // MARK: - Status
 
-/// Floating status above the video: progress of long operations, results, playback copy.
+/// Black pills above the video: progress of long operations, results, the playback copy.
 struct StatusHUD: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject var player: PlayerController
@@ -378,10 +375,10 @@ struct StatusHUD: View {
         VStack(spacing: 8) {
             if let activity = model.activity {
                 ActivityPill(activity: activity)
-                    .transition(.materialize(reduceMotion: reduceMotion))
+                    .transition(.reveal(reduceMotion: reduceMotion))
             } else if let notice = model.exportNotice {
                 NoticePill(notice: notice)
-                    .transition(.materialize(reduceMotion: reduceMotion))
+                    .transition(.reveal(reduceMotion: reduceMotion))
             }
             if let progress = player.copyProgress {
                 Pill {
@@ -389,25 +386,30 @@ struct StatusHUD: View {
                     Text(L("Готовлю видео для просмотра · %@%%", "\(Int(progress * 100))"))
                         .font(.system(size: 12, weight: .medium))
                         .monospacedDigit()
+                        .lineLimit(1)
+                        .fixedSize()
                 }
-                .transition(.materialize(reduceMotion: reduceMotion))
+                .transition(.reveal(reduceMotion: reduceMotion))
             } else if player.copyFailed {
                 Pill {
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                    Text(L("Это видео не получается воспроизвести, но распознать и экспортировать его можно"))
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(Palette.attention)
+                    Text(L("Видео не проигрывается, но распознать и сохранить можно"))
                         .font(.system(size: 12, weight: .medium))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
                 }
-                .transition(.materialize(reduceMotion: reduceMotion))
+                .transition(.reveal(reduceMotion: reduceMotion))
             }
         }
-        .animation(Motion.animation(Motion.standard, reduceMotion: reduceMotion), value: model.activity?.kind)
-        .animation(Motion.animation(Motion.standard, reduceMotion: reduceMotion), value: model.exportNotice)
-        .animation(Motion.animation(Motion.standard, reduceMotion: reduceMotion), value: player.copyProgress == nil)
-        .animation(Motion.animation(Motion.standard, reduceMotion: reduceMotion), value: player.copyFailed)
+        .animation(Motion.animation(Motion.island, reduceMotion: reduceMotion), value: model.activity?.kind)
+        .animation(Motion.animation(Motion.island, reduceMotion: reduceMotion), value: model.exportNotice)
+        .animation(Motion.animation(Motion.island, reduceMotion: reduceMotion), value: player.copyProgress == nil)
+        .animation(Motion.animation(Motion.island, reduceMotion: reduceMotion), value: player.copyFailed)
     }
 }
 
-/// Glass capsule for status messages.
+/// A black capsule over the video.
 struct Pill<Content: View>: View {
     @ViewBuilder var content: Content
 
@@ -415,9 +417,11 @@ struct Pill<Content: View>: View {
         HStack(spacing: 10) {
             content
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .glassSurface(Capsule())
+        .padding(.horizontal, 14)
+        .frame(minHeight: 40)
+        .background(Capsule().fill(Color.black))
+        .overlay(Capsule().strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
+        .shadow(color: .black.opacity(0.45), radius: 16, y: 6)
     }
 }
 
@@ -428,46 +432,31 @@ private struct ActivityPill: View {
     var body: some View {
         Pill {
             Image(systemName: icon)
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: 28, height: 28)
-                .background(Circle().fill(Color.accentColor.gradient))
-            VStack(alignment: .leading, spacing: 5) {
+                .font(.system(size: 11.5, weight: .bold))
+                .foregroundStyle(.black)
+                .frame(width: 26, height: 26)
+                .background(Circle().fill(Brand.mark))
+            VStack(alignment: .leading, spacing: 6) {
                 Text(activity.title)
                     .font(.system(size: 12.5, weight: .semibold))
-                if let progress = activity.progress {
-                    ProgressView(value: progress)
-                        .progressViewStyle(.linear)
-                        .frame(width: 180)
-                        .controlSize(.small)
-                } else {
-                    ProgressView()
-                        .progressViewStyle(.linear)
-                        .frame(width: 180)
-                        .controlSize(.small)
-                }
+                    .lineLimit(1)
+                    .fixedSize()
+                ProgressLine(value: activity.progress)
+                    .frame(width: 170)
             }
             if let progress = activity.progress {
                 Text("\(Int(progress * 100))%")
                     .font(.system(size: 12, weight: .medium).monospacedDigit())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Palette.secondary)
                     .frame(width: 36, alignment: .trailing)
             }
             if activity.kind != .opening {
-                Button {
+                IconButton(symbol: "xmark", help: L("Отменить"), size: 24) {
                     model.cancelActivity()
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 24, height: 24)
-                        .background(Circle().fill(Color.white.opacity(0.12)))
-                        .contentShape(Circle())
                 }
-                .buttonStyle(PressableStyle())
-                .help(L("Отменить"))
             }
         }
+        .padding(.vertical, 2)
     }
 
     private var icon: String {
@@ -486,37 +475,33 @@ private struct NoticePill: View {
     var body: some View {
         Pill {
             Image(systemName: "checkmark")
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: 28, height: 28)
-                .background(Circle().fill(Color.green.gradient))
-            Text(L("Сохранено: %@", "\(notice.url.lastPathComponent)"))
+                .font(.system(size: 11.5, weight: .bold))
+                .foregroundStyle(.black)
+                .frame(width: 26, height: 26)
+                .background(Circle().fill(Brand.mark))
+            Text(L("Сохранено"))
                 .font(.system(size: 12.5, weight: .semibold))
                 .lineLimit(1)
+                .fixedSize()
+            Text(notice.url.lastPathComponent)
+                .font(.system(size: 12))
+                .foregroundStyle(Palette.secondary)
+                .lineLimit(1)
                 .truncationMode(.middle)
-                .frame(maxWidth: 260)
-            Button(L("Показать в Finder")) {
-                NSWorkspace.shared.activateFileViewerSelecting([notice.url])
-            }
-            .glassButton()
-            .controlSize(.small)
+                .help(notice.url.path)
             Button(L("Открыть")) {
                 NSWorkspace.shared.open(notice.url)
             }
-            .glassProminentButton()
+            .appButton(.primary)
             .controlSize(.small)
-            Button {
-                model.exportNotice = nil
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 24, height: 24)
-                    .background(Circle().fill(Color.white.opacity(0.12)))
-                    .contentShape(Circle())
+            .fixedSize()
+            IconButton(symbol: "folder", help: L("Показать в Finder"), size: 24) {
+                NSWorkspace.shared.activateFileViewerSelecting([notice.url])
             }
-            .buttonStyle(PressableStyle())
-            .help(L("Скрыть"))
+            IconButton(symbol: "xmark", help: L("Скрыть"), size: 24) {
+                model.exportNotice = nil
+            }
         }
+        .onAppear { Haptics.success() }
     }
 }

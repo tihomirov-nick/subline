@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 import ImageIO
-import SubtitsCore
+import SublineCore
 
 /// Frame proportions used for the preview before a video is opened.
 enum PreviewAspect: String, CaseIterable, Identifiable {
@@ -248,7 +248,7 @@ final class AppModel: ObservableObject {
     func exportPresets(all: Bool) {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.json]
-        panel.nameFieldStringValue = all ? L("Пресеты Subtits.json") : L("Пресет %@.json", "\(preset.name)")
+        panel.nameFieldStringValue = all ? L("Пресеты Subline.json") : L("Пресет %@.json", "\(preset.name)")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             try PresetStore.export(all ? presets : [preset], to: url)
@@ -267,7 +267,7 @@ final class AppModel: ObservableObject {
             do {
                 imported += try PresetStore.importPresets(from: url)
             } catch {
-                errorMessage = L("Файл «%@» не похож на пресет Subtits.", "\(url.lastPathComponent)")
+                errorMessage = L("Файл «%@» не похож на пресет Subline", "\(url.lastPathComponent)")
             }
         }
         guard !imported.isEmpty else { return }
@@ -277,7 +277,7 @@ final class AppModel: ObservableObject {
         }
         selectedPresetID = imported.last!.id
         if let missing = imported.map(\.fontFamily).first(where: { !FontLibrary.isAvailable(family: $0) }) {
-            errorMessage = L("В пресете указан шрифт «%@», а на этом Mac его нет. Добавьте файлы шрифта через пункт «Добавить файлы шрифтов…» в меню «Стиль».", "\(missing)")
+            errorMessage = L("В пресете указан шрифт «%@», а на этом Mac его нет. Добавьте файлы шрифта через пункт «Добавить файлы шрифтов…» в меню «Стиль»", "\(missing)")
         }
     }
 
@@ -588,7 +588,7 @@ final class AppModel: ObservableObject {
 
     private func loadFrame(at time: Double) async {
         guard let url = mediaURL else { return }
-        let output = FileManager.default.temporaryDirectory.appendingPathComponent("subtits-frame-\(UUID().uuidString).jpg")
+        let output = FileManager.default.temporaryDirectory.appendingPathComponent("subline-frame-\(UUID().uuidString).jpg")
         defer { try? FileManager.default.removeItem(at: output) }
         do {
             try await FFmpeg.extractFrame(from: url, at: time, maxDimension: 1600, hdrFilter: media?.hdrToSDRFilter, to: output)
@@ -659,7 +659,7 @@ final class AppModel: ObservableObject {
                 self.rebuildCues()
                 self.activity = nil
                 if transcript.segments.isEmpty {
-                    self.errorMessage = L("Речь не распознана. Проверьте язык распознавания или попробуйте другую модель.")
+                    self.errorMessage = L("Речь не распознана. Проверьте язык распознавания или попробуйте другую модель")
                 }
             } catch {
                 guard let self else { return }
@@ -669,6 +669,11 @@ final class AppModel: ObservableObject {
                 }
             }
         }
+    }
+
+    /// Shows a progress pill without doing the work (automated checks of the layout).
+    func debugShowActivity(_ kind: Activity.Kind, title: String, progress: Double?) {
+        activity = Activity(kind: kind, title: title, progress: progress)
     }
 
     func cancelActivity() {
@@ -895,7 +900,7 @@ final class AppModel: ObservableObject {
     func export(_ format: ExportFormat) {
         guard let info = media, let url = mediaURL, !isBusy else { return }
         guard !cues.isEmpty else {
-            errorMessage = L("Субтитров пока нет. Сначала распознайте речь.")
+            errorMessage = L("Субтитров пока нет. Сначала распознайте речь")
             return
         }
         if format.needsVideo && !info.hasVideo {

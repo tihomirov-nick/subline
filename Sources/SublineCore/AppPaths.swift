@@ -2,13 +2,23 @@ import Foundation
 
 /// File system locations used by the app.
 public enum AppPaths {
-    public static let appName = "Subtits"
+    public static let appName = "Subline"
 
-    /// ~/Library/Application Support/Subtits
-    public static var appSupport: URL {
+    /// ~/Library/Application Support/Subline
+    public static var appSupport: URL { ensureDir(supportURL) }
+
+    /// The folder of Subtits (the app's earlier name) becomes Subline's on first use: presets, models, fonts and saved
+    /// transcripts move with it.
+    private static let supportURL: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return ensureDir(base.appendingPathComponent(appName, isDirectory: true))
-    }
+        let url = base.appendingPathComponent(appName, isDirectory: true)
+        let old = base.appendingPathComponent(FormerName.folderName, isDirectory: true)
+        let files = FileManager.default
+        if !files.fileExists(atPath: url.path), files.fileExists(atPath: old.path) {
+            try? files.moveItem(at: old, to: url)
+        }
+        return url
+    }()
 
     public static var modelsDir: URL { ensureDir(appSupport.appendingPathComponent("Models", isDirectory: true)) }
     public static var userFontsDir: URL { ensureDir(appSupport.appendingPathComponent("Fonts", isDirectory: true)) }
@@ -75,7 +85,7 @@ public enum AppPaths {
     /// The ffmpeg binary: bundled helper first, then the development copy, then a system install.
     public static var ffmpegURL: URL? {
         var candidates: [URL] = []
-        if let env = ProcessInfo.processInfo.environment["SUBTITS_FFMPEG"] {
+        if let env = ProcessInfo.processInfo.environment["SUBLINE_FFMPEG"] {
             candidates.append(URL(fileURLWithPath: env))
         }
         candidates.append(Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/ffmpeg"))

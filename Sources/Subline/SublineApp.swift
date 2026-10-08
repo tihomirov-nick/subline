@@ -1,19 +1,20 @@
 import SwiftUI
 import AppKit
 import AVFoundation
-import SubtitsCore
+import SublineCore
 
 @main
-struct SubtitsApp: App {
+struct SublineApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var model = AppModel()
 
     init() {
+        FormerName.adoptSettings()
         Localization.apply()
     }
 
     var body: some Scene {
-        Window("Subtits", id: "main") {
+        Window("Subline", id: "main") {
             MainView()
                 .environmentObject(model)
                 .environmentObject(model.modelStore)
@@ -25,10 +26,11 @@ struct SubtitsApp: App {
                     DebugHooks.model = model
                 }
         }
+        .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1400, height: 860)
         .commands {
             CommandGroup(replacing: .appTermination) {
-                Button(L("Завершить Subtits")) { AppDelegate.quit(model) }
+                Button(L("Завершить Subline")) { AppDelegate.quit(model) }
                     .keyboardShortcut("q", modifiers: .command)
             }
             CommandGroup(replacing: .newItem) {
@@ -51,8 +53,8 @@ struct SubtitsApp: App {
                     .disabled(model.mediaURL == nil || model.isBusy)
             }
             CommandGroup(after: .sidebar) {
-                Button(model.showInspector ? L("Скрыть инспектор") : L("Показать инспектор")) {
-                    withAnimation(Motion.standard) { model.showInspector.toggle() }
+                Button(model.showInspector ? L("Скрыть стиль") : L("Показать стиль")) {
+                    withAnimation(Motion.island) { model.showInspector.toggle() }
                 }
                 .keyboardShortcut("i", modifiers: [.command, .option])
             }
@@ -61,11 +63,11 @@ struct SubtitsApp: App {
                 Button(model.player.isPlaying ? L("Пауза   (пробел)") : L("Воспроизвести   (пробел)")) { model.player.togglePlay() }
                     .disabled(!model.player.isReady)
                 Divider()
-                Button(L("Кадр вперёд   (→)")) { model.player.step(frames: 1) }
+                Button(L("Кадр вперед   (→)")) { model.player.step(frames: 1) }
                     .disabled(!model.hasMedia)
                 Button(L("Кадр назад   (←)")) { model.player.step(frames: -1) }
                     .disabled(!model.hasMedia)
-                Button(L("Секунда вперёд   (⇧→)")) { model.player.seek(to: model.player.currentTime + 1) }
+                Button(L("Секунда вперед   (⇧→)")) { model.player.seek(to: model.player.currentTime + 1) }
                     .disabled(!model.hasMedia)
                 Button(L("Секунда назад   (⇧←)")) { model.player.seek(to: model.player.currentTime - 1) }
                     .disabled(!model.hasMedia)
@@ -110,10 +112,8 @@ struct SubtitsApp: App {
 
         Settings {
             SettingsView()
-                .environmentObject(model)
-                .environmentObject(model.modelStore)
-                .environmentObject(model.fontStore)
         }
+        .windowResizability(.contentSize)
     }
 }
 
@@ -152,6 +152,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         true
     }
 
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // Black blocks and white text everywhere, as in FaceID: menus, panels and alerts are dark too.
+        NSApp.appearance = NSAppearance(named: .darkAqua)
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         DebugHooks.install()
     }
@@ -180,23 +185,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         attempt(20)
     }
 
-    /// Starts a new copy of the app with the same video, then quits this one (a new language needs a restart).
-    @MainActor
-    static func relaunch(_ model: AppModel?, failed: @escaping @MainActor @Sendable () -> Void) {
-        model?.flushPendingSaves()
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.createsNewApplicationInstance = true
-        let completion: @Sendable (NSRunningApplication?, Error?) -> Void = { running, _ in
-            let launched = running != nil
-            Task { @MainActor in launched ? quit(model) : failed() }
-        }
-        if let video = model?.mediaURL {
-            NSWorkspace.shared.open([video], withApplicationAt: Bundle.main.bundleURL, configuration: configuration, completionHandler: completion)
-        } else {
-            NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration, completionHandler: completion)
-        }
-    }
-
     /// An open sheet (model manager) would otherwise block quitting.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         MainActor.assumeIsolated {
@@ -213,40 +201,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 /// Test hooks driven by environment variables (used for automated UI checks):
-///   SUBTITS_OPEN=<file>                       open a media file at launch
-///   SUBTITS_SNAPSHOTS="3:/tmp/a.png;9:/tmp/b.png"  save window snapshots after N seconds
-///   SUBTITS_ACTIONS="5:select-cue-2;6:open-models"  run actions after N seconds
-///   SUBTITS_QUIT_AFTER=<seconds>
-///   SUBTITS_APPEARANCE=light|dark              interface appearance of the app
-///   SUBTITS_FORCE_ACTIVE=1                     draw the window as active while it stays in the background
-///   SUBTITS_LEGACY_GLASS=1                     the look of systems without Liquid Glass (see Look)
+///   SUBLINE_OPEN=<file>                       open a media file at launch
+///   SUBLINE_SNAPSHOTS="3:/tmp/a.png;9:/tmp/b.png"  save window snapshots after N seconds
+///   SUBLINE_ACTIONS="5:select-cue-2;6:open-models"  run actions after N seconds
+///   SUBLINE_QUIT_AFTER=<seconds>
+///   SUBLINE_FORCE_ACTIVE=1                     draw the window as active while it stays in the background
 @MainActor
 enum DebugHooks {
     static weak var model: AppModel?
-    static let forceActive = ProcessInfo.processInfo.environment["SUBTITS_FORCE_ACTIVE"] != nil
+    /// SwiftUI's own way to open Settings (macOS 14 and later), registered by the main window.
+    static var openSettings: (() -> Void)?
+    static let forceActive = ProcessInfo.processInfo.environment["SUBLINE_FORCE_ACTIVE"] != nil
 
     nonisolated static func install() {
         let env = ProcessInfo.processInfo.environment
-        if let appearance = env["SUBTITS_APPEARANCE"] {
-            Task { @MainActor in
-                NSApp.appearance = NSAppearance(named: appearance == "light" ? .aqua : .darkAqua)
-            }
-        }
         // A restarted copy of the app inherits the environment and must not repeat the test actions.
-        for name in ["SUBTITS_OPEN", "SUBTITS_SNAPSHOTS", "SUBTITS_ACTIONS", "SUBTITS_QUIT_AFTER"] { unsetenv(name) }
+        for name in ["SUBLINE_OPEN", "SUBLINE_SNAPSHOTS", "SUBLINE_ACTIONS", "SUBLINE_QUIT_AFTER"] { unsetenv(name) }
         Task { @MainActor in
-            if let path = env["SUBTITS_OPEN"] {
+            if let path = env["SUBLINE_OPEN"] {
                 try? await Task.sleep(nanoseconds: 800_000_000)
                 model?.openMedia(URL(fileURLWithPath: path))
             }
         }
-        for (delay, value) in schedule(env["SUBTITS_SNAPSHOTS"]) {
+        for (delay, value) in schedule(env["SUBLINE_SNAPSHOTS"]) {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { MainActor.assumeIsolated { snapshot(to: value) } }
         }
-        for (delay, value) in schedule(env["SUBTITS_ACTIONS"]) {
+        for (delay, value) in schedule(env["SUBLINE_ACTIONS"]) {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { MainActor.assumeIsolated { perform(value) } }
         }
-        if let quit = env["SUBTITS_QUIT_AFTER"].flatMap(Double.init) {
+        if let quit = env["SUBLINE_QUIT_AFTER"].flatMap(Double.init) {
             DispatchQueue.main.asyncAfter(deadline: .now() + quit) { MainActor.assumeIsolated { AppDelegate.quit(model) } }
         }
     }
@@ -326,8 +309,7 @@ enum DebugHooks {
             showStandalone(ModelManagerView().environmentObject(model).environmentObject(model.modelStore),
                            size: CGSize(width: 720, height: 620))
         case "window-settings":
-            showStandalone(SettingsView().environmentObject(model).environmentObject(model.modelStore).environmentObject(model.fontStore),
-                           size: CGSize(width: 460, height: 260))
+            showStandalone(SettingsView(), size: CGSize(width: 380, height: 90))
         case "window-library":
             showStandalone(FontLibraryView().environmentObject(model).environmentObject(model.fontStore),
                            size: CGSize(width: 820, height: 680))
@@ -368,8 +350,8 @@ enum DebugHooks {
         case "report-window":
             if parts.count > 1 {
                 var lines: [String] = []
-                for window in NSApp.windows where window.isVisible {
-                    lines.append("window \(window.frame) content \(window.contentLayoutRect) screen \(window.screen?.visibleFrame ?? .zero)")
+                for window in NSApp.windows {
+                    lines.append("window \(type(of: window)) '\(window.title)' id=\(window.identifier?.rawValue ?? "-") visible=\(window.isVisible) \(window.frame) content \(window.contentLayoutRect) transparentTitlebar=\(window.titlebarAppearsTransparent) fullSize=\(window.styleMask.contains(.fullSizeContentView)) toolbar=\(window.toolbar != nil) bg=\(window.backgroundColor.description)")
                     func dump(_ view: NSView, _ depth: Int) {
                         guard depth < 9 else { return }
                         lines.append(String(repeating: "  ", count: depth) + "\(type(of: view)) \(view.frame)")
@@ -382,11 +364,11 @@ enum DebugHooks {
         case "tab":
             if parts.count > 1, let tab = InspectorTab(rawValue: parts[1]) { model.inspectorTab = tab }
         case "settings":
-            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-        case "language":
-            if parts.count > 1, let language = AppLanguage(rawValue: parts[1]) { Localization.select(language) }
-        case "relaunch":
-            AppDelegate.relaunch(model) { NSLog("Subtits: relaunch failed") }
+            if let openSettings {
+                openSettings()
+            } else {
+                NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
+            }
         case "report-language":
             // report-language=<path>: interface language and the titles of the system menus
             if parts.count > 1 {
@@ -394,7 +376,7 @@ enum DebugHooks {
                 let menu = NSApp.mainMenu
                 let info: [String: Any] = [
                     "current": Localization.current,
-                    "selected": Localization.selected.rawValue,
+                    "appleLanguages": UserDefaults.standard.persistentDomain(forName: Bundle.main.bundleIdentifier ?? "")?["AppleLanguages"] ?? "none",
                     "preferredLocalizations": Bundle.main.preferredLocalizations,
                     "menus": titles(menu),
                     "appMenu": titles(menu?.items.first?.submenu),
@@ -471,12 +453,33 @@ enum DebugHooks {
         case "slant":
             if parts.count > 1, let degrees = Double(parts[1]) { model.setStyle(\.slant, \.slant, degrees) }
         case "upper": model.setStyle(\.uppercase, \.uppercase, true)
+        case "outline": model.setStyle(\.outlineEnabled, \.outlineEnabled, parts.count < 2 || parts[1] != "0")
+        case "shadow": model.setStyle(\.shadowEnabled, \.shadowEnabled, parts.count < 2 || parts[1] != "0")
+        case "box":
+            if parts.count > 1, let mode = BoxMode(rawValue: parts[1]) { model.setStyle(\.boxMode, \.boxMode, mode) }
+        case "window-size":
+            // window-size=<width>,<height> in points, keeping the top left corner
+            if parts.count > 1 {
+                let size = parts[1].split(separator: ",").compactMap { Double($0) }
+                if size.count == 2, let window = NSApp.windows.first(where: { $0.identifier?.rawValue == "main" || $0.title == "Subline" }) {
+                    var frame = window.frame
+                    frame.origin.y += frame.height - size[1]
+                    frame.size = CGSize(width: size[0], height: size[1])
+                    window.setFrame(frame, display: true)
+                }
+            }
         case "pos":
             if parts.count > 1 {
                 let xy = parts[1].split(separator: ",").compactMap { Double($0) }
                 if xy.count == 2 { model.setPosition(x: xy[0] / model.frameWidth, y: xy[1] / model.frameHeight) }
             }
         case "group": model.createGroup()
+        case "fake-activity":
+            // fake-activity=<title>|<progress or ->
+            if parts.count > 1 {
+                let args = parts[1].split(separator: "|", maxSplits: 1).map(String.init)
+                model.debugShowActivity(.transcribing, title: args[0], progress: args.count > 1 ? Double(args[1]) : nil)
+            }
         case "copy-style": model.copyStyle()
         case "paste-style": model.pasteStyle()
         case "library": model.showFontLibrary = true
@@ -504,7 +507,7 @@ enum DebugHooks {
     }
 }
 
-/// SUBTITS_FORCE_ACTIVE=1: controls look as in the active window (screenshots of a window kept in the background).
+/// SUBLINE_FORCE_ACTIVE=1: controls look as in the active window (screenshots of a window kept in the background).
 private struct DebugActiveState: ViewModifier {
     func body(content: Content) -> some View {
         if DebugHooks.forceActive {
@@ -512,5 +515,15 @@ private struct DebugActiveState: ViewModifier {
         } else {
             content
         }
+    }
+}
+
+/// Hands SwiftUI's Settings action to the test hooks.
+@available(macOS 14.0, *)
+struct SettingsOpenerHook: View {
+    @Environment(\.openSettings) private var openSettings
+
+    var body: some View {
+        Color.clear.onAppear { DebugHooks.openSettings = { openSettings() } }
     }
 }

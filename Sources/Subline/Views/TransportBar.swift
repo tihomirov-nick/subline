@@ -1,8 +1,7 @@
 import SwiftUI
-import SubtitsCore
+import SublineCore
 
-/// Playback controls under the video: subtitle and frame stepping, play/pause, scrubber with subtitle marks.
-/// A Liquid Glass capsule floating on the dark viewer.
+/// Playback under the video: subtitle and frame stepping, play/pause, the scrubber with the subtitles marked on it.
 struct TransportBar: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject var player: PlayerController
@@ -10,55 +9,28 @@ struct TransportBar: View {
     var body: some View {
         let duration = max(player.duration, 0.001)
         HStack(spacing: 2) {
-            Button {
+            IconButton(symbol: "backward.end.fill", help: L("Предыдущий субтитр (↑)"), size: 28, filled: false) {
                 model.selectAdjacentCue(-1)
-            } label: {
-                Image(systemName: "backward.end.fill")
             }
-            .buttonStyle(TransportButtonStyle())
-            .help(L("Предыдущий субтитр (↑)"))
             .disabled(model.cues.isEmpty)
-
-            Button {
+            IconButton(symbol: "backward.frame.fill", help: L("Кадр назад (←), секунда назад (⇧←)"), size: 28, filled: false) {
                 player.step(frames: -1)
-            } label: {
-                Image(systemName: "backward.frame.fill")
             }
-            .buttonStyle(TransportButtonStyle())
-            .help(L("Кадр назад (←), секунда назад (⇧←)"))
-
-            Button {
-                player.togglePlay()
-            } label: {
-                Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                    .contentTransition(.symbolEffectIfAvailable)
-            }
-            .buttonStyle(TransportButtonStyle(prominent: true))
-            .padding(.horizontal, 2)
-            .help(player.isPlaying ? L("Пауза (пробел)") : L("Воспроизвести (пробел)"))
-            .disabled(!player.isReady)
-
-            Button {
+            PlayButton(player: player)
+                .padding(.horizontal, 3)
+            IconButton(symbol: "forward.frame.fill", help: L("Кадр вперед (→), секунда вперед (⇧→)"), size: 28, filled: false) {
                 player.step(frames: 1)
-            } label: {
-                Image(systemName: "forward.frame.fill")
             }
-            .buttonStyle(TransportButtonStyle())
-            .help(L("Кадр вперёд (→), секунда вперёд (⇧→)"))
-
-            Button {
+            IconButton(symbol: "forward.end.fill", help: L("Следующий субтитр (↓)"), size: 28, filled: false) {
                 model.selectAdjacentCue(1)
-            } label: {
-                Image(systemName: "forward.end.fill")
             }
-            .buttonStyle(TransportButtonStyle())
-            .help(L("Следующий субтитр (↓)"))
             .disabled(model.cues.isEmpty)
 
             Text(TransportBar.format(player.currentTime))
                 .font(.system(size: 12.5, weight: .semibold).monospacedDigit())
+                .lineLimit(1)
                 .frame(width: 66, alignment: .trailing)
-                .padding(.leading, 8)
+                .padding(.leading, 6)
                 .help(Text(verbatim: L("Кадр %@", "\(player.currentFrame)")))
 
             Scrubber(player: player, cues: model.cues, duration: duration)
@@ -66,14 +38,15 @@ struct TransportBar: View {
 
             Text("−" + TransportBar.format(max(0, duration - player.currentTime)))
                 .font(.system(size: 12.5, weight: .medium).monospacedDigit())
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Palette.secondary)
+                .lineLimit(1)
                 .frame(width: 70, alignment: .leading)
                 .help(L("Осталось"))
         }
-        .padding(.leading, 8)
-        .padding(.trailing, 12)
-        .frame(height: 56)
-        .glassSurface(Capsule())
+        .padding(.leading, 7)
+        .padding(.trailing, 10)
+        .frame(height: 48)
+        .background(Capsule().fill(Palette.card))
     }
 
     /// "0:12.48" or "1:02:03.40".
@@ -89,38 +62,35 @@ struct TransportBar: View {
     }
 }
 
-/// Round transport button with hover and instant press feedback; the prominent one is the white
-/// play button.
-struct TransportButtonStyle: ButtonStyle {
-    var prominent = false
+/// The white round play button; the symbol turns into pause.
+private struct PlayButton: View {
+    @ObservedObject var player: PlayerController
 
-    func makeBody(configuration: Configuration) -> some View {
-        TransportButtonBody(configuration: configuration, prominent: prominent)
+    var body: some View {
+        Button {
+            player.togglePlay()
+        } label: {
+            symbol
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(.black)
+                .frame(width: 36, height: 36)
+                .background(Circle().fill(Brand.mark))
+                .contentShape(Circle())
+        }
+        .buttonStyle(PressStyle(scale: 0.88))
+        .disabled(!player.isReady)
+        .opacity(player.isReady ? 1 : 0.4)
+        .help(player.isPlaying ? L("Пауза (пробел)") : L("Воспроизвести (пробел)"))
+        .accessibilityLabel(player.isPlaying ? L("Пауза") : L("Воспроизвести"))
     }
 
-    private struct TransportButtonBody: View {
-        let configuration: Configuration
-        let prominent: Bool
-        @State private var hovering = false
-        @Environment(\.isEnabled) private var isEnabled
-
-        var body: some View {
-            let size: CGFloat = prominent ? 40 : 32
-            configuration.label
-                .font(.system(size: prominent ? 16 : 13, weight: .semibold))
-                .foregroundStyle(prominent ? Color.black : Color.primary)
-                .frame(width: size, height: size)
-                .background(
-                    Circle().fill(prominent ? Color.white.opacity(isEnabled ? (hovering ? 1 : 0.94) : 0.35)
-                                            : Color.white.opacity(configuration.isPressed ? 0.2 : (hovering ? 0.11 : 0)))
-                )
-                .shadow(color: .black.opacity(prominent ? 0.25 : 0), radius: 6, y: 2)
-                .scaleEffect(configuration.isPressed ? 0.9 : 1)
-                .opacity(isEnabled ? 1 : 0.4)
-                .animation(.spring(response: 0.18, dampingFraction: 1), value: configuration.isPressed)
-                .animation(.easeOut(duration: 0.12), value: hovering)
-                .contentShape(Circle())
-                .onHover { hovering = $0 }
+    @ViewBuilder
+    private var symbol: some View {
+        let image = Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+        if #available(macOS 14.0, *) {
+            image.contentTransition(.symbolEffect(.replace))
+        } else {
+            image
         }
     }
 }
@@ -144,32 +114,33 @@ struct Scrubber: View {
             let head = CGSize(width: expanded ? 6 : 4, height: expanded ? 22 : 16)
             ZStack(alignment: .leading) {
                 Capsule()
-                    .fill(Color.white.opacity(0.16))
+                    .fill(Color.white.opacity(0.14))
                     .frame(height: trackHeight)
-                CueMarks(cues: cues, duration: duration)
+                Capsule()
+                    .fill(Brand.mark)
+                    .frame(width: max(trackHeight, width * progress), height: trackHeight)
+                CueMarks(cues: cues, duration: duration, progress: progress)
                     .frame(height: trackHeight)
                     .clipShape(Capsule())
                 Capsule()
-                    .fill(Color.white.opacity(0.85))
-                    .frame(width: max(trackHeight, width * progress), height: trackHeight)
-                Capsule()
                     .fill(Color.white)
                     .frame(width: head.width, height: head.height)
-                    .shadow(color: .black.opacity(0.45), radius: 3, y: 1)
+                    .shadow(color: .black.opacity(0.5), radius: 3, y: 1)
                     .offset(x: min(max(0, width * progress - head.width / 2), width - head.width))
                 if let x = hoverX, !isDragging {
                     Text(TransportBar.format(Double(x / width) * duration))
                         .font(.system(size: 11, weight: .semibold).monospacedDigit())
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
-                        .glassSurface(Capsule())
+                        .background(Capsule().fill(Color.black))
+                        .overlay(Capsule().strokeBorder(Color.white.opacity(0.12)))
                         .fixedSize()
-                        .offset(x: min(max(0, x - 30), width - 60), y: -30)
+                        .offset(x: min(max(0, x - 30), width - 60), y: -28)
                         .allowsHitTesting(false)
                 }
             }
             .frame(height: geometry.size.height)
-            .animation(.spring(response: 0.22, dampingFraction: 1), value: expanded)
+            .animation(.spring(response: 0.22, dampingFraction: 0.8), value: expanded)
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0)
@@ -197,27 +168,28 @@ struct Scrubber: View {
     }
 }
 
+/// Where the subtitles are: lighter marks ahead of the playhead, darker ones on the played part.
 private struct CueMarks: View {
     let cues: [Cue]
     let duration: Double
+    let progress: CGFloat
 
     var body: some View {
         Canvas { context, size in
             guard duration > 0 else { return }
+            let playhead = size.width * progress
+            let played = CGRect(x: 0, y: 0, width: playhead, height: size.height)
+            let ahead = CGRect(x: playhead, y: 0, width: max(0, size.width - playhead), height: size.height)
             for cue in cues {
                 let x = CGFloat(cue.start / duration) * size.width
                 let w = max(1.5, CGFloat((cue.end - cue.start) / duration) * size.width - 1)
-                context.fill(Path(CGRect(x: x, y: 0, width: w, height: size.height)), with: .color(Color.accentColor.opacity(0.8)))
+                let rect = CGRect(x: x, y: 0, width: w, height: size.height)
+                let before = rect.intersection(played)
+                if !before.isNull, before.width > 0 { context.fill(Path(before), with: .color(.black.opacity(0.28))) }
+                let after = rect.intersection(ahead)
+                if !after.isNull, after.width > 0 { context.fill(Path(after), with: .color(.white.opacity(0.34))) }
             }
         }
         .allowsHitTesting(false)
-    }
-}
-
-private extension ContentTransition {
-    /// Symbol replace animation where available (macOS 14+), plain swap otherwise.
-    static var symbolEffectIfAvailable: ContentTransition {
-        if #available(macOS 14.0, *) { return .symbolEffect(.replace) }
-        return .identity
     }
 }

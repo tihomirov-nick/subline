@@ -1,6 +1,6 @@
 import Foundation
 import AVFoundation
-import SubtitsCore
+import SublineCore
 
 /// Video playback for the preview: play/pause, frame stepping and precise scrubbing.
 /// Files AVFoundation cannot play (MKV, WebM, AVI, ...) get a playable copy made with ffmpeg in the background.

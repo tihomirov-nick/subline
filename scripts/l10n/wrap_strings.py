@@ -105,7 +105,7 @@ for path in sys.argv[1:]:
     for n, line in protected.items():
         result = result.replace('//__PROTECTED_%d__' % n, line)
     if changes:
-        if 'import SubtitsCore' not in result and '/SubtitsCore/' not in path:
+        if 'import SublineCore' not in result and '/SublineCore/' not in path:
             pass
         open(path, 'w').write(result + tail)
     print(f'{changes:4d} {path}')

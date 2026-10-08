@@ -1,7 +1,7 @@
 import Foundation
-import SubtitsCore
+import SublineCore
 
-/// Presets are kept in ~/Library/Application Support/Subtits/presets.json
+/// Presets are kept in ~/Library/Application Support/Subline/presets.json
 enum PresetStore {
     static func load() -> [SubtitlePreset] {
         guard let data = try? Data(contentsOf: AppPaths.presetsFile),

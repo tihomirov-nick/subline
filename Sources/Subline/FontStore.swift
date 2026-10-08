@@ -1,6 +1,6 @@
 import Foundation
 import CoreText
-import SubtitsCore
+import SublineCore
 
 /// Installs fonts from the catalog (one click) and fonts added as files.
 @MainActor

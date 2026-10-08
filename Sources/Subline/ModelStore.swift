@@ -1,6 +1,6 @@
 import Foundation
 import CryptoKit
-import SubtitsCore
+import SublineCore
 
 func sha256Hex(_ data: Data) -> String {
     SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
@@ -190,7 +190,7 @@ final class ModelStore: NSObject, ObservableObject {
             await MainActor.run {
                 self.downloads[id] = nil
                 if let problem = failure {
-                    self.lastError = L("Модель «%@» скачалась с ошибкой: %@. Попробуйте ещё раз.", "\(model.name)", "\(problem)")
+                    self.lastError = L("Модель «%@» скачалась с ошибкой: %@. Попробуйте еще раз", "\(model.name)", "\(problem)")
                 }
                 self.refresh()
                 if failure == nil { self.onInstalled?(id) }

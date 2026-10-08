@@ -50,7 +50,7 @@ public enum Exporter {
         let canvas = renderer.canvas
         guard let context = CueRenderer.makeContext(canvas: canvas, pixelSize: canvas),
               let blank = context.makeImage() else {
-            throw MediaError.failed(L("Не удалось подготовить кадры субтитров."))
+            throw MediaError.failed(L("Не удалось подготовить кадры субтитров"))
         }
         try CueRenderer.writePNG(blank, to: workDir.appendingPathComponent("blank.png"))
 
@@ -136,7 +136,7 @@ public enum Exporter {
                 attempts.append(burnArguments(listURL: listURL, info: info, format: format, hardware: false, output: partial))
             }
         case .srt:
-            throw MediaError.failed(L("SRT сохраняется без кодирования видео."))
+            throw MediaError.failed(L("SRT сохраняется без кодирования видео"))
         }
 
         var lastError: Error?

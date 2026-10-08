@@ -15,13 +15,13 @@ public enum FontError: LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .notAFont(let name): return L("Файл «%@» не является шрифтом (нужен .ttf, .otf или .ttc).", "\(name)")
+        case .notAFont(let name): return L("Файл «%@» не является шрифтом (нужен .ttf, .otf или .ttc)", "\(name)")
         }
     }
 }
 
 /// Font discovery and registration. Fonts shipped with the app (Contents/Resources/Fonts) and fonts added
-/// by the user (~/Library/Application Support/Subtits/Fonts) are registered for this process only.
+/// by the user (~/Library/Application Support/Subline/Fonts) are registered for this process only.
 public enum FontLibrary {
     public static let fontExtensions: Set<String> = ["ttf", "otf", "ttc", "otc", "dfont"]
 

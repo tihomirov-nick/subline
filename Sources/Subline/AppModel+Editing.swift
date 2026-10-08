@@ -1,6 +1,6 @@
 import SwiftUI
 import AppKit
-import SubtitsCore
+import SublineCore
 
 /// Words selected in one subtitle.
 struct WordSelection: Equatable {

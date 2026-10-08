@@ -6,11 +6,11 @@ import Foundation
 let packageRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent().path
 
 let package = Package(
-    name: "Subtits",
+    name: "Subline",
     platforms: [.macOS("13.3")],
     products: [
-        .executable(name: "Subtits", targets: ["Subtits"]),
-        .executable(name: "subtits-cli", targets: ["SubtitsCLI"]),
+        .executable(name: "Subline", targets: ["Subline"]),
+        .executable(name: "subline-cli", targets: ["SublineCLI"]),
     ],
     targets: [
         // whisper.cpp (built by scripts/build_whisper.sh as a universal static library)
@@ -29,21 +29,21 @@ let package = Package(
         ),
         // Transcription, subtitle layout/rendering, ffmpeg pipeline (no UI)
         .target(
-            name: "SubtitsCore",
+            name: "SublineCore",
             dependencies: ["CWhisper"],
-            path: "Sources/SubtitsCore"
+            path: "Sources/SublineCore"
         ),
         // SwiftUI application
         .executableTarget(
-            name: "Subtits",
-            dependencies: ["SubtitsCore"],
-            path: "Sources/Subtits"
+            name: "Subline",
+            dependencies: ["SublineCore"],
+            path: "Sources/Subline"
         ),
         // Command line tool for testing the pipeline without UI
         .executableTarget(
-            name: "SubtitsCLI",
-            dependencies: ["SubtitsCore"],
-            path: "Sources/SubtitsCLI"
+            name: "SublineCLI",
+            dependencies: ["SublineCore"],
+            path: "Sources/SublineCLI"
         ),
     ]
 )

@@ -2,16 +2,16 @@ import Foundation
 import CoreGraphics
 import ImageIO
 import CoreText
-import SubtitsCore
+import SublineCore
 
 // Development tool: runs the subtitle pipeline without the UI.
 //
-//   subtits-cli probe <media>
-//   subtits-cli transcribe <media> --model <ggml.bin> [--lang ru] [--greedy] [--vad] [--out transcript.json]
-//   subtits-cli cues <transcript.json> [--preset 0] [--size 1080x1920] [--case original]
-//   subtits-cli render <transcript.json> --out frame.png [--preset 0] [--size 1080x1920] [--time 3.5] [--background frame.jpg]
-//   subtits-cli export <media> <transcript.json> --out out.mp4 [--format mp4H264|mp4HEVC|movProRes|overlayProRes4444|srt] [--preset 0]
-//   subtits-cli fonts [family]
+//   subline-cli probe <media>
+//   subline-cli transcribe <media> --model <ggml.bin> [--lang ru] [--greedy] [--vad] [--out transcript.json]
+//   subline-cli cues <transcript.json> [--preset 0] [--size 1080x1920] [--case original]
+//   subline-cli render <transcript.json> --out frame.png [--preset 0] [--size 1080x1920] [--time 3.5] [--background frame.jpg]
+//   subline-cli export <media> <transcript.json> --out out.mp4 [--format mp4H264|mp4HEVC|movProRes|overlayProRes4444|srt] [--preset 0]
+//   subline-cli fonts [family]
 
 setvbuf(stdout, nil, _IOLBF, 0)
 
@@ -66,7 +66,7 @@ func sizeFromOptions(default size: CGSize = CGSize(width: 1080, height: 1920)) -
 
 func run() async {
     FontLibrary.registerAppFonts()
-    guard let command = arguments.first else { fail("usage: subtits-cli <probe|transcribe|cues|render|export|fonts> ...") }
+    guard let command = arguments.first else { fail("usage: subline-cli <probe|transcribe|cues|render|export|fonts> ...") }
     arguments.removeFirst()
 
     do {
