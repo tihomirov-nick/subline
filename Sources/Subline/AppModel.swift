@@ -947,6 +947,11 @@ final class AppModel: ObservableObject {
         export(format, to: output)
     }
 
+    /// A long job shown in the window without running it (test hooks, for pictures of the interface).
+    func stageActivity(_ activity: Activity?) {
+        self.activity = activity
+    }
+
     private func export(_ format: ExportFormat, to output: URL) {
         guard let info = media else { return }
         let preset = self.preset

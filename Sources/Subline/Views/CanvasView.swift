@@ -123,7 +123,7 @@ struct SubtitleCanvas: View {
 
     @ViewBuilder
     private var picture: some View {
-        if model.hasVideo && player.isReady {
+        if model.hasVideo && player.isReady && !DebugHooks.stillFrame {
             PlayerLayerView(player: player.player)
         } else if let frame = model.frameImage {
             Image(decorative: frame, scale: 1)

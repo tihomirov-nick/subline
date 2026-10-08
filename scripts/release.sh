@@ -5,7 +5,7 @@
 #   VERSION=1.5.0 NOTES=~/notes-1.5.0.md ./scripts/release.sh     (keep the notes file outside the repo)
 # git goes through the remote's deploy key (git@github-subline:..., see ~/.ssh/config). The release API needs a
 # fine-grained token of tihomirov-nick with Contents: Read and write on this repo, kept in the Keychain
-# (account tihomirov-nick, service TOKEN_SERVICE; by default github-subline-token, then github-mpxtrans-token).
+# (account tihomirov-nick, service TOKEN_SERVICE; by default github-subline-token).
 # gh's own login is a different account and is not used. Without such a token the script stops before the build.
 # Safe to re-run: an existing tag on HEAD and an existing (draft) release are reused.
 set -euo pipefail
@@ -18,7 +18,7 @@ NOTES="$(cd "$(dirname "$NOTES")" && pwd)/$(basename "$NOTES")"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 REPO="tihomirov-nick/subline"
-SERVICES="${TOKEN_SERVICE:-github-subline-token github-mpxtrans-token}"
+SERVICES="${TOKEN_SERVICE:-github-subline-token}"
 TAG="v$VERSION"
 DMG="dist/Subline-$VERSION.dmg"
 

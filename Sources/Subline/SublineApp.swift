@@ -215,6 +215,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 enum DebugHooks {
     static weak var model: AppModel?
     static let forceActive = ProcessInfo.processInfo.environment["SUBLINE_FORCE_ACTIVE"] != nil
+    /// The "still" action: the video shows its still frame instead of the player layer, which offscreen renders miss.
+    static var stillFrame = false
 
     nonisolated static func install() {
         let env = ProcessInfo.processInfo.environment
@@ -288,7 +290,7 @@ enum DebugHooks {
 
     /// Renders a view in an offscreen window (for checking layouts taller than the screen).
     static func renderOffscreen<V: View>(_ view: V, size: CGSize, to path: String) {
-        let hosting = NSHostingView(rootView: view.frame(width: size.width, height: size.height))
+        let hosting = NSHostingView(rootView: view.frame(width: size.width, height: size.height).modifier(DebugActiveState()))
         hosting.frame = CGRect(origin: .zero, size: size)
         let window = NSWindow(contentRect: hosting.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false   // Swift owns it; close() would release it a second time
@@ -318,7 +320,10 @@ enum DebugHooks {
                            size: CGSize(width: 820, height: 680))
         case "close-sheet": model.showModelManager = false
         case "click-row":
-            if parts.count > 1, let index = Int(parts[1]), index < model.cues.count { model.clickRow(model.cues[index], modifiers: []) }
+            // click-row=<index>[+] (+ = with ⇧)
+            if parts.count > 1, let index = Int(parts[1].replacingOccurrences(of: "+", with: "")), index < model.cues.count {
+                model.clickRow(model.cues[index], modifiers: parts[1].hasSuffix("+") ? [.shift] : [])
+            }
         case "select-cue":
             if parts.count > 1, let index = Int(parts[1]), index < model.cues.count { model.select(model.cues[index]) }
         case "preset":
@@ -411,6 +416,11 @@ enum DebugHooks {
                     "currentCueStyled": model.currentCue?.hasCustomStyle ?? false,
                     "currentCueWordStyles": model.currentCue?.wordStyles?.keys.sorted() ?? [],
                     "installedFonts": model.fontStore.installedIDs.sorted(),
+                    "bundleID": Bundle.main.bundleIdentifier ?? "",
+                    "soundEffects": SoundEffects.isEnabled,
+                    "menuBarIcon": MenuBarIcon.isEnabled,
+                    "version": model.updater.currentVersion,
+                    "developmentBuild": model.updater.isDevelopmentBuild,
                 ]
                 if let data = try? JSONSerialization.data(withJSONObject: info, options: [.prettyPrinted, .sortedKeys]) {
                     try? data.write(to: URL(fileURLWithPath: parts[1]))
@@ -474,8 +484,60 @@ enum DebugHooks {
         case "render-models":
             if parts.count > 1 {
                 renderOffscreen(ModelManagerView().environmentObject(model).environmentObject(model.modelStore),
-                                size: CGSize(width: 720, height: 620), to: parts[1])
+                                size: CGSize(width: 620, height: 560), to: parts[1])
             }
+        case "render-settings":
+            if parts.count > 1 {
+                let view = SettingsView().environmentObject(model.updater)
+                renderOffscreen(view, size: NSHostingView(rootView: view).fittingSize, to: parts[1])
+            }
+        case "render-glyph":
+            // render-glyph=<marks typed>,<path>: the menu bar icon during recognition, white, 8 pixels per point
+            let args = parts.count > 1 ? parts[1].split(separator: ",", maxSplits: 1).map(String.init) : []
+            if args.count == 2, let typed = Double(args[0]),
+               let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 128, pixelsHigh: 128, bitsPerSample: 8,
+                                          samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                                          bytesPerRow: 0, bitsPerPixel: 0) {
+                rep.size = NSSize(width: 16, height: 16)
+                NSGraphicsContext.saveGraphicsState()
+                NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+                let rect = NSRect(x: 0, y: 0, width: 16, height: 16)
+                WorkGlyph.image(.typing(typed)).draw(in: rect)
+                NSColor.white.set()
+                rect.fill(using: .sourceAtop)
+                NSGraphicsContext.restoreGraphicsState()
+                try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: args[1]))
+            }
+        case "activity":
+            // activity=<transcribing|exporting>,<0…1>: the window shows a long job without running it. Only while the
+            // menu bar icon is off, so nothing appears outside the window.
+            let args = parts.count > 1 ? parts[1].split(separator: ",", maxSplits: 1).map(String.init) : []
+            if args.count == 2, let progress = Double(args[1]), !MenuBarIcon.isEnabled {
+                let exporting = args[0] == "exporting"
+                model.stageActivity(Activity(kind: exporting ? .exporting : .transcribing,
+                                             title: exporting ? L("Готовлю субтитры") : L("Распознаю речь"), progress: progress))
+            }
+        case "outline":
+            if parts.count > 1 { model.setStyle(\.outlineEnabled, \.outlineEnabled, parts[1] == "1") }
+        case "shadow":
+            if parts.count > 1 { model.setStyle(\.shadowEnabled, \.shadowEnabled, parts[1] == "1") }
+        case "box":
+            if parts.count > 1, let mode = BoxMode(rawValue: parts[1]) { model.setStyle(\.boxMode, \.boxMode, mode) }
+        case "render-main":
+            // render-main=<width>,<height>,<path>: the whole window content, offscreen
+            let args = parts.count > 1 ? parts[1].split(separator: ",", maxSplits: 2).map(String.init) : []
+            if args.count == 3, let width = Double(args[0]), let height = Double(args[1]) {
+                renderOffscreen(MainView().environmentObject(model).environmentObject(model.modelStore)
+                                    .environmentObject(model.fontStore).environmentObject(model.updater),
+                                size: CGSize(width: width, height: height), to: args[2])
+            }
+        case "render-library":
+            if parts.count > 1 {
+                renderOffscreen(FontLibraryView().environmentObject(model).environmentObject(model.fontStore),
+                                size: CGSize(width: 760, height: 640), to: parts[1])
+            }
+        case "still":
+            stillFrame = true
         case "export":
             if parts.count > 1 { model.exportForTesting(.mp4H264, to: URL(fileURLWithPath: parts[1])) }
         default: break

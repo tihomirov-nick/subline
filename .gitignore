@@ -7,3 +7,5 @@ Vendor/
 TestMedia/
 # Built from Resources/AppIcon.icon by actool into the app
 Resources/AppIcon.icns
+# Promo pictures and texts for social networks (not part of the app)
+promo/
