@@ -142,6 +142,12 @@ swift build --product subline-cli
 .build/debug/subline-cli export video.mp4 t.json --out result.mp4 --format mp4H264
 ```
 
+Интерфейс тоже можно проверять без мыши и не выводя окно на передний план. Переменные окружения `SUBLINE_OPEN`,
+`SUBLINE_ACTIONS`, `SUBLINE_SNAPSHOTS` и `SUBLINE_QUIT_AFTER` открывают видео, выполняют действия по расписанию,
+сохраняют снимки окна и закрывают приложение, а `SUBLINE_FORCE_ACTIVE` рисует фоновое окно как активное. Список
+действий есть в `DebugHooks` (`Sources/Subline/SublineApp.swift`). При отладке пригодятся ещё `SUBLINE_FFMPEG`, которая
+подставляет другой ffmpeg, и `SUBLINE_DTW_HEADS` (`large-v3` или `top`), которая меняет головы внимания для времени слов.
+
 ## Подпись и Gatekeeper
 
 По умолчанию приложение подписывается собственным сертификатом «tihomirov-nick» (см. раздел «Обновления»), а если его

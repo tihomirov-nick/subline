@@ -169,7 +169,7 @@ final class AppModel: ObservableObject {
         Task.detached(priority: .utility) { WhisperEngine.warmUp() }
 
         modelStore = ModelStore()
-        updater = Updater(repo: DebugHooks.updateRepo, apiBase: DebugHooks.updateAPI)
+        updater = Updater(repo: "tihomirov-nick/subline")
         menuBarIcon = MenuBarIcon()
         let loaded = PresetStore.load()
         presets = loaded
@@ -392,11 +392,6 @@ final class AppModel: ObservableObject {
         if !families.contains(effectiveStyle.fontFamily), let family = families.first {
             setStyle(\.fontFamily, \.fontFamily, family)
         }
-    }
-
-    var fontIsMissing: Bool {
-        _ = fontsVersion
-        return !FontLibrary.isAvailable(family: preset.fontFamily)
     }
 
     // MARK: - Recognition model
@@ -703,11 +698,6 @@ final class AppModel: ObservableObject {
                 }
             }
         }
-    }
-
-    /// Shows a progress pill without doing the work (automated checks of the layout).
-    func debugShowActivity(_ kind: Activity.Kind, title: String, progress: Double?) {
-        activity = Activity(kind: kind, title: title, progress: progress)
     }
 
     func cancelActivity() {

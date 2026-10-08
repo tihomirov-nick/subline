@@ -3,8 +3,8 @@ import Foundation
 /// Subline was called Subtits before version 2.0. On the first launch under the new name it takes over the old
 /// settings and files: presets, downloaded models and fonts, saved transcripts.
 public enum FormerName {
-    /// SUBLINE_FORMER_DOMAIN replaces it in automated checks, so they never touch the real settings.
-    static let bundleIdentifier = ProcessInfo.processInfo.environment["SUBLINE_FORMER_DOMAIN"] ?? "com.subtits.app"
+    /// The settings domain of Subtits.
+    static let bundleIdentifier = "com.subtits.app"
     /// ~/Library/Application Support/Subtits
     static let folderName = "Subtits"
     /// The language picked in the settings of Subtits ("automatic", "ru" or "en").

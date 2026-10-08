@@ -176,48 +176,12 @@ final class MenuBarIcon: NSObject {
             }
         })
     }
-
-    /// Faces of the icon for automated checks, in both styles at 1x and 2x: `<dir>/<style>/<name>@<n>x.png`, black on
-    /// transparent.
-    static func renderFaces(to directory: URL) {
-        var faces: [(String, WorkGlyph.Face)] = typing.enumerated().map { ("typing-\(String(format: "%02d", $0.offset))", .typing($0.element)) }
-        faces += [0, 0.25, 0.5, 0.75, 1].map { ("filling-\(Int($0 * 100))", .filling($0)) }
-        faces += [("success", .success), ("failure", .failure)]
-        for style in [WorkGlyph.Style.wholeIcon, .signOnly] {
-            let folder = directory.appendingPathComponent(style == .wholeIcon ? "wholeIcon" : "signOnly")
-            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            for (name, face) in faces {
-                let image = WorkGlyph.image(face, style: style)
-                for scale in [1, 2] {
-                    guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 16 * scale, pixelsHigh: 16 * scale, bitsPerSample: 8,
-                                                     samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
-                                                     bytesPerRow: 0, bitsPerPixel: 0) else { continue }
-                    rep.size = image.size
-                    NSGraphicsContext.saveGraphicsState()
-                    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-                    image.draw(in: NSRect(origin: .zero, size: image.size))
-                    NSGraphicsContext.restoreGraphicsState()
-                    try? rep.representation(using: .png, properties: [:])?.write(to: folder.appendingPathComponent("\(name)@\(scale)x.png"))
-                }
-            }
-        }
-    }
 }
 
-/// The glyph, drawn in code as a template image: the sign of the app icon, "— — •" over "• —", in lines. A 16 × 16 pt
-/// canvas with the glyph in the middle 14 × 14 pt, lines of 1.5 pt (3 px on Retina, rows on whole pixels) with round
-/// ends and joins, only the dots filled.
+/// The glyph, drawn in code as a template image: the outline of the app icon's squircle with the sign inside, "— — •"
+/// over "• —", in lines. A 16 × 16 pt canvas with the glyph in the middle 14 × 14 pt, lines of 1.5 pt (3 px on Retina,
+/// rows on whole pixels) with round ends and joins, only the dots filled.
 enum WorkGlyph {
-    enum Style {
-        /// The whole icon: the outline of its squircle (exponent 5) along the 14 pt square, the sign inside.
-        case wholeIcon
-        /// The sign alone across the 14 pt square.
-        case signOnly
-    }
-
-    /// The style of the menu bar icon.
-    static let style: Style = .wholeIcon
-
     enum Face: Hashable {
         /// So many marks typed; a fraction grows the next dash.
         case typing(Double)
@@ -227,69 +191,56 @@ enum WorkGlyph {
         case failure
     }
 
-    static var markCount: Int { Layout.of(style).marks.count }
+    static var markCount: Int { marks.count }
 
     private static let line: CGFloat = 1.5
+    private static let dot: CGFloat = 2.1
 
-    /// Where the marks go in a style: in reading order, a dot has the same start and end; coordinates from the top
-    /// left. The proportions are the icon's: a dash 216 and a gap 58 of the 632 units of the sign. Inside the outline the
-    /// sign is as wide as in the icon (632 of the 824 units of the body), alone it takes the square. The rows sit on
-    /// whole pixels.
-    private struct Layout {
-        let dot: CGFloat
-        let marks: [(x0: CGFloat, x1: CGFloat, y: CGFloat)]
-
-        static func of(_ style: Style) -> Layout { style == .wholeIcon ? wholeIcon : signOnly }
-        private static let wholeIcon = Layout(width: 9.6, dot: 2.1, gap: 0.9)
-        private static let signOnly = Layout(width: 14, dot: 2.4, gap: 1.3)
-
-        private init(width: CGFloat, dot: CGFloat, gap: CGFloat) {
-            self.dot = dot
-            let dash = (width - dot - 2 * gap) / 2
-            let top: CGFloat = 6.25, bottom: CGFloat = 9.75
-            var x = 8 - width / 2
-            var marks: [(x0: CGFloat, x1: CGFloat, y: CGFloat)] = []
-            for _ in 0..<2 {
-                marks.append((x + line / 2, x + dash - line / 2, top))
-                x += dash + gap
-            }
-            marks.append((x + dot / 2, x + dot / 2, top))
-            x = 8 - (dot + gap + dash) / 2
-            marks.append((x + dot / 2, x + dot / 2, bottom))
-            x += dot + gap
-            marks.append((x + line / 2, x + dash - line / 2, bottom))
-            self.marks = marks
+    /// The marks in reading order, a dot has the same start and end; coordinates from the top left. The proportions
+    /// are the icon's: a dash 216 and a gap 58 of the 632 units of the sign, and inside the outline the sign is as wide
+    /// as in the icon (632 of the 824 units of the body). The rows sit on whole pixels.
+    private static let marks: [(x0: CGFloat, x1: CGFloat, y: CGFloat)] = {
+        let width: CGFloat = 9.6, gap: CGFloat = 0.9
+        let dash = (width - dot - 2 * gap) / 2
+        let top: CGFloat = 6.25, bottom: CGFloat = 9.75
+        var x = 8 - width / 2
+        var marks: [(x0: CGFloat, x1: CGFloat, y: CGFloat)] = []
+        for _ in 0..<2 {
+            marks.append((x + line / 2, x + dash - line / 2, top))
+            x += dash + gap
         }
-    }
+        marks.append((x + dot / 2, x + dot / 2, top))
+        x = 8 - (dot + gap + dash) / 2
+        marks.append((x + dot / 2, x + dot / 2, bottom))
+        x += dot + gap
+        marks.append((x + line / 2, x + dash - line / 2, bottom))
+        return marks
+    }()
 
     /// One image per face: the menu bar keeps a drawn image, so a face that comes back costs nothing.
     @MainActor private static var images: [Face: NSImage] = [:]
 
-    @MainActor static func image(_ face: Face, style: Style = WorkGlyph.style) -> NSImage {
-        if style == WorkGlyph.style, let image = images[face] { return image }
+    @MainActor static func image(_ face: Face) -> NSImage {
+        if let image = images[face] { return image }
         let image = NSImage(size: NSSize(width: 16, height: 16), flipped: true) { _ in
-            draw(face, style: style)
+            draw(face)
             return true
         }
         image.isTemplate = true
-        if style == WorkGlyph.style { images[face] = image }
+        images[face] = image
         return image
     }
 
-    private static func draw(_ face: Face, style: Style) {
-        let layout = Layout.of(style)
-        let marks = layout.marks, dot = layout.dot
+    private static func draw(_ face: Face) {
         NSColor.black.set()
-        if style == .wholeIcon {
-            let outline = squircle(NSRect(x: 1.75, y: 1.75, width: 12.5, height: 12.5))
-            outline.lineWidth = line
-            outline.stroke()
-        }
+        let outline = squircle(NSRect(x: 1.75, y: 1.75, width: 12.5, height: 12.5))
+        outline.lineWidth = line
+        outline.stroke()
         switch face {
         case .typing(let typed):
             for (index, mark) in marks.enumerated() {
                 let amount = min(1, max(0, typed - Double(index)))
-                if amount > 0 { drawMark(mark, length: amount, dot: dot) }
+                if amount > 0 { drawMark(mark, length: amount) }
             }
         case .filling(let progress):
             let lengths = marks.map { $0.x0 == $0.x1 ? dot : $0.x1 - $0.x0 + line }
@@ -297,32 +248,27 @@ enum WorkGlyph {
             var before: CGFloat = 0
             for (index, mark) in marks.enumerated() {
                 NSColor.black.withAlphaComponent(0.3).set()
-                drawMark(mark, length: 1, dot: dot)
+                drawMark(mark, length: 1)
                 let filled = min(1, max(0, (CGFloat(progress) * total - before) / lengths[index]))
                 if filled > 0 {
                     NSGraphicsContext.saveGraphicsState()
                     let left = mark.x0 == mark.x1 ? mark.x0 - dot / 2 : mark.x0 - line / 2
                     NSRect(x: left, y: 0, width: lengths[index] * filled, height: 16).clip()
                     NSColor.black.set()
-                    drawMark(mark, length: 1, dot: dot)
+                    drawMark(mark, length: 1)
                     NSGraphicsContext.restoreGraphicsState()
                 }
                 before += lengths[index]
             }
         case .success:
-            if style == .wholeIcon {
-                stroke([NSPoint(x: 5, y: 8.25), NSPoint(x: 7.25, y: 10.5), NSPoint(x: 11, y: 5.75)])
-            } else {
-                stroke([NSPoint(x: 3.5, y: 8.25), NSPoint(x: 6.75, y: 11.5), NSPoint(x: 12.5, y: 4.75)])
-            }
+            stroke([NSPoint(x: 5, y: 8.25), NSPoint(x: 7.25, y: 10.5), NSPoint(x: 11, y: 5.75)])
         case .failure:
-            let (top, bottom, center): (CGFloat, CGFloat, CGFloat) = style == .wholeIcon ? (4.75, 8.75, 11) : (3, 9.25, 12.25)
-            stroke([NSPoint(x: 8, y: top), NSPoint(x: 8, y: bottom)])
-            NSBezierPath(ovalIn: NSRect(x: 8 - dot / 2, y: center - dot / 2, width: dot, height: dot)).fill()
+            stroke([NSPoint(x: 8, y: 4.75), NSPoint(x: 8, y: 8.75)])
+            NSBezierPath(ovalIn: NSRect(x: 8 - dot / 2, y: 11 - dot / 2, width: dot, height: dot)).fill()
         }
     }
 
-    private static func drawMark(_ mark: (x0: CGFloat, x1: CGFloat, y: CGFloat), length: Double, dot: CGFloat) {
+    private static func drawMark(_ mark: (x0: CGFloat, x1: CGFloat, y: CGFloat), length: Double) {
         if mark.x0 == mark.x1 {
             NSBezierPath(ovalIn: NSRect(x: mark.x0 - dot / 2, y: mark.y - dot / 2, width: dot, height: dot)).fill()
         } else {

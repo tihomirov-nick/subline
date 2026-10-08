@@ -29,25 +29,17 @@ enum SoundEffects {
         UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? true
     }
 
-    /// Told about every sound with where it came from (automated checks).
-    static var observer: ((Event, String) -> Void)?
-
     /// Plays the sound of `event` unless the sounds are off. Returns at once: loading and playing happen on a queue
     /// of their own.
     static func play(_ event: Event) {
-        guard isEnabled else {
-            observer?(event, "off")
-            return
-        }
+        guard isEnabled else { return }
         queue.async {
             if let id = systemSounds[event] {
                 AudioServicesPlaySystemSound(id)
-                observer?(event, event.file)
             } else {
                 // The file is gone in this version of macOS: the classic sound of /System/Library/Sounds instead.
                 let name = event.fallback
                 DispatchQueue.main.async { NSSound(named: name)?.play() }
-                observer?(event, name)
             }
         }
     }

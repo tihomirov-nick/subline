@@ -211,16 +211,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 ///   SUBLINE_ACTIONS="5:select-cue-2;6:open-models"  run actions after N seconds
 ///   SUBLINE_QUIT_AFTER=<seconds>
 ///   SUBLINE_FORCE_ACTIVE=1                     draw the window as active while it stays in the background
-///   SUBLINE_SOUND_LOG=<file>                   write down every sound effect and the file it came from
-///   SUBLINE_UPDATE_API=<url> SUBLINE_UPDATE_REPO=<owner/repo>   look for updates there instead of GitHub
 @MainActor
 enum DebugHooks {
     static weak var model: AppModel?
-    static let updateRepo = ProcessInfo.processInfo.environment["SUBLINE_UPDATE_REPO"] ?? "tihomirov-nick/subline"
-    static let updateAPI = ProcessInfo.processInfo.environment["SUBLINE_UPDATE_API"].flatMap(URL.init(string:))
-        ?? URL(string: "https://api.github.com")!
-    /// SwiftUI's own way to open Settings (macOS 14 and later), registered by the main window.
-    static var openSettings: (() -> Void)?
     static let forceActive = ProcessInfo.processInfo.environment["SUBLINE_FORCE_ACTIVE"] != nil
 
     nonisolated static func install() {
@@ -241,15 +234,6 @@ enum DebugHooks {
         }
         if let quit = env["SUBLINE_QUIT_AFTER"].flatMap(Double.init) {
             DispatchQueue.main.asyncAfter(deadline: .now() + quit) { MainActor.assumeIsolated { AppDelegate.quit(model) } }
-        }
-        if let path = env["SUBLINE_SOUND_LOG"] {
-            FileManager.default.createFile(atPath: path, contents: nil)
-            SoundEffects.observer = { event, source in
-                guard let file = FileHandle(forWritingAtPath: path) else { return }
-                file.seekToEndOfFile()
-                file.write(Data("\(event) \(source)\n".utf8))
-                try? file.close()
-            }
         }
     }
 
@@ -382,12 +366,6 @@ enum DebugHooks {
             }
         case "tab":
             if parts.count > 1, let tab = InspectorTab(rawValue: parts[1]) { model.inspectorTab = tab }
-        case "settings":
-            if let openSettings {
-                openSettings()
-            } else {
-                NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
-            }
         case "report-language":
             // report-language=<path>: interface language and the titles of the system menus
             if parts.count > 1 {
@@ -472,49 +450,12 @@ enum DebugHooks {
         case "slant":
             if parts.count > 1, let degrees = Double(parts[1]) { model.setStyle(\.slant, \.slant, degrees) }
         case "upper": model.setStyle(\.uppercase, \.uppercase, true)
-        case "outline": model.setStyle(\.outlineEnabled, \.outlineEnabled, parts.count < 2 || parts[1] != "0")
-        case "shadow": model.setStyle(\.shadowEnabled, \.shadowEnabled, parts.count < 2 || parts[1] != "0")
-        case "box":
-            if parts.count > 1, let mode = BoxMode(rawValue: parts[1]) { model.setStyle(\.boxMode, \.boxMode, mode) }
-        case "window-size":
-            // window-size=<width>,<height> in points, keeping the top left corner
-            if parts.count > 1 {
-                let size = parts[1].split(separator: ",").compactMap { Double($0) }
-                if size.count == 2, let window = NSApp.windows.first(where: { $0.identifier?.rawValue == "main" || $0.title == "Subline" }) {
-                    var frame = window.frame
-                    frame.origin.y += frame.height - size[1]
-                    frame.size = CGSize(width: size[0], height: size[1])
-                    window.setFrame(frame, display: true)
-                }
-            }
         case "pos":
             if parts.count > 1 {
                 let xy = parts[1].split(separator: ",").compactMap { Double($0) }
                 if xy.count == 2 { model.setPosition(x: xy[0] / model.frameWidth, y: xy[1] / model.frameHeight) }
             }
         case "group": model.createGroup()
-        case "fake-activity":
-            // fake-activity=<title>|<progress or ->[|opening or exporting]
-            if parts.count > 1 {
-                let args = parts[1].split(separator: "|", maxSplits: 2).map(String.init)
-                let kind: Activity.Kind = args.count < 3 ? .transcribing : args[2] == "opening" ? .opening : .exporting
-                model.debugShowActivity(kind, title: args[0], progress: args.count > 1 ? Double(args[1]) : nil)
-            }
-        case "render-menubar":
-            // render-menubar=<dir>: every face of the menu bar icon
-            if parts.count > 1 { MenuBarIcon.renderFaces(to: URL(fileURLWithPath: parts[1])) }
-        case "menubar-display":
-            // menubar-display=sleep|wake: what the icon hears when the display sleeps (only inside Subline)
-            let name = parts.count > 1 && parts[1] == "wake" ? NSWorkspace.screensDidWakeNotification : NSWorkspace.screensDidSleepNotification
-            NSWorkspace.shared.notificationCenter.post(name: name, object: NSWorkspace.shared)
-        case "menubar-finish":
-            // menubar-finish=success|failure: ends a fake activity the way real work ends
-            model.menuBarIcon.finish(parts.count > 1 && parts[1] == "failure" ? .failure : .success)
-            model.cancelActivity()
-        case "update-check": model.updater.check(userInitiated: true)
-        case "update-install": model.updater.install()
-        case "update-cancel": model.updater.cancel()
-        case "update-dismiss": model.updater.dismiss()
         case "copy-style": model.copyStyle()
         case "paste-style": model.pasteStyle()
         case "library": model.showFontLibrary = true
@@ -536,11 +477,7 @@ enum DebugHooks {
                                 size: CGSize(width: 720, height: 620), to: parts[1])
             }
         case "export":
-            // export=<file>: a video in MP4 (H.264), or subtitles when the file ends in .srt
-            if parts.count > 1 {
-                let url = URL(fileURLWithPath: parts[1])
-                model.exportForTesting(url.pathExtension == "srt" ? .srt : .mp4H264, to: url)
-            }
+            if parts.count > 1 { model.exportForTesting(.mp4H264, to: URL(fileURLWithPath: parts[1])) }
         default: break
         }
     }
@@ -554,15 +491,5 @@ private struct DebugActiveState: ViewModifier {
         } else {
             content
         }
-    }
-}
-
-/// Hands SwiftUI's Settings action to the test hooks.
-@available(macOS 14.0, *)
-struct SettingsOpenerHook: View {
-    @Environment(\.openSettings) private var openSettings
-
-    var body: some View {
-        Color.clear.onAppear { DebugHooks.openSettings = { openSettings() } }
     }
 }

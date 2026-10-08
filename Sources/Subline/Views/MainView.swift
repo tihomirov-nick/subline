@@ -36,9 +36,6 @@ struct MainView: View {
         }
         .background(Palette.window)
         .background(WindowConfigurator(chrome: $chrome))
-        .background {
-            if #available(macOS 14.0, *) { SettingsOpenerHook() }
-        }
         .ignoresSafeArea()
         .foregroundStyle(.white)
         .environment(\.colorScheme, .dark)

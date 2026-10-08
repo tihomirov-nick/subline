@@ -47,7 +47,6 @@ public struct Transcript: Codable, Sendable {
     }
 
     public var words: [Word] { segments.flatMap(\.words) }
-    public var plainText: String { segments.map(\.text).joined(separator: " ") }
 }
 
 /// One subtitle shown on screen. `text` keeps the original case and punctuation; the case/punctuation mode
