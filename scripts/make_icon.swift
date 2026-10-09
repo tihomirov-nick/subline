@@ -2,33 +2,29 @@
 // with actool) and Resources/AppIcon-1024.png (a preview of the whole icon for the README).
 // Usage: swift scripts/make_icon.swift
 //
-// Flat, black and white: a pure black body and two subtitle lines drawn as white dashes and dots, "— — •" over "• —",
-// centered like captions. No gradients, glass, highlights or shadows. The body (a squircle with exponent 5, 100 px from
-// the edges of 1024) and the weight of the marks are shared by the icons of all four apps of the family.
+// Flat, black and white: a pure black body with the classic subtitles badge drawn on it in white, two caption lines of
+// capsules, a short and a long one over a long and a short one. No gradients, glass, highlights or shadows. The body
+// (a squircle with exponent 5, 100 px from the edges of 1024) is shared by the icons of all four apps of the family.
 import AppKit
 
 let bodyColor: (red: CGFloat, green: CGFloat, blue: CGFloat) = (0, 0, 0)
 
-enum Mark { case dash, dot }
-
 /// The mark, drawn with the current (white) colours in the flat drawing's coordinates: a 1024 square whose body is the
-/// squircle at 100...924, y growing upwards. Pills 84 thick with fully round ends, dashes 216 long, 58 between the marks
-/// and 70 between the lines: the reference weight for the marks of all four icons.
+/// squircle at 100...924, y growing upwards. The proportions are those of the subtitles badge the user sent as the
+/// reference (142 × 100 px): capsules with fully round ends, 10 thick, 23⅓ and 56⅔ long, 10 apart, the lines 16⅔
+/// apart, so both lines are 90 wide. In thicknesses: 7/3 and 17/3 long, 1 apart, the lines 5/3 apart and 9 wide. The
+/// lines are 632 wide here (196...828, as wide as the earlier mark and as Slovo's), so the capsules are 70.2 thick, and
+/// the block sits in the middle of the body.
 func drawMark(_ ctx: CGContext) {
-    let thickness: CGFloat = 84
-    let dash: CGFloat = 216
-    let gap: CGFloat = 58
-    let lineGap: CGFloat = 70
-    let rows: [[Mark]] = [[.dash, .dash, .dot], [.dot, .dash]]
-    func width(_ row: [Mark]) -> CGFloat {
-        row.map { $0 == .dash ? dash : thickness }.reduce(0, +) + CGFloat(row.count - 1) * gap
-    }
-    let blockHeight = CGFloat(rows.count) * thickness + CGFloat(rows.count - 1) * lineGap
-    var top = 512 + blockHeight / 2
-    for row in rows {
-        var x = 512 - width(row) / 2
-        for mark in row {
-            let length = mark == .dash ? dash : thickness
+    let width: CGFloat = 632
+    let thickness = width / 9
+    let short = thickness * 7 / 3, gap = thickness, lineGap = thickness * 5 / 3
+    let long = width - short - gap
+    let lines: [[CGFloat]] = [[short, long], [long, short]]
+    var top = 512 + (CGFloat(lines.count) * thickness + CGFloat(lines.count - 1) * lineGap) / 2
+    for line in lines {
+        var x = 512 - width / 2
+        for length in line {
             let rect = CGRect(x: x, y: top - thickness, width: length, height: thickness)
             ctx.addPath(CGPath(roundedRect: rect, cornerWidth: thickness / 2, cornerHeight: thickness / 2, transform: nil))
             x += length + gap

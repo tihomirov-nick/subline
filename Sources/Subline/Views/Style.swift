@@ -6,7 +6,7 @@ import SublineCore
 
 /// Subline's look comes from FaceID, an app by the same author: black blocks with round continuous corners, white
 /// text, controls drawn by the app rather than by macOS (so they look the same on every macOS version). The brand
-/// color is the white of the dashes and dots in the app icon; around the blocks is the graphite of the icon's body.
+/// color is the white of the capsules in the app icon; around the blocks is graphite.
 enum Brand {
     /// The marks of the icon: white with a cool tint. Main buttons, switches that are on.
     static let mark = Color(red: 0.96, green: 0.96, blue: 0.98)

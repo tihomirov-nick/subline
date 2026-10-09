@@ -73,9 +73,10 @@ final class MenuBarIcon: NSObject {
 
     // MARK: - Drawing
 
-    /// Recognition types the marks in one after another: the two dashes of the top line grow, two dots appear, the last
-    /// dash grows, a pause with the full lines, a short blank. 20 frames of 0.1 s.
-    private static let typing: [Double] = [0.34, 0.67, 1, 1.34, 1.67, 2, 3, 3, 4, 4, 4.34, 4.67, 5, 5, 5, 5, 5, 5, 0, 0]
+    /// Recognition types the capsules in one after another, each growing from its left end at one pace: the short and
+    /// the long one of the top line, a beat at the line break, the long and the short one of the bottom line, a pause
+    /// with the full lines, a short blank. 20 frames of 0.1 s.
+    private static let typing: [Double] = [0.5, 1, 1.25, 1.5, 1.75, 2, 2, 2.25, 2.5, 2.75, 3, 3.5, 4, 4, 4, 4, 4, 4, 0, 0]
 
     private var animates: Bool {
         work == .recognition && outcome == nil && !displayAsleep && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
@@ -178,15 +179,15 @@ final class MenuBarIcon: NSObject {
     }
 }
 
-/// The glyph, drawn in code as a template image: the outline of the app icon's squircle with the sign inside, "— — •"
-/// over "• —", in lines. The glyph is 14 × 14 pt, drawn on a 16 pt square; the image is 16 pt high and 15 pt wide, as in
-/// every app of the family, with the glyph in the middle. Lines of 1.5 pt (3 px on Retina, the rows and the outline on
-/// whole pixels) with round ends and joins, only the dots filled.
+/// The glyph, drawn in code as a template image: the subtitles badge the app icon is drawn from, as it is, a filled plate
+/// with two caption lines of capsules cut out of it, a short and a long one over a long and a short one. The image is
+/// 16 pt high and 15 pt wide, as in every app of the family, with the 14 × 10 pt plate in the middle. The capsules are
+/// 1 pt thick and sit on whole pixels at 1x and at 2x, so they stay crisp on any screen.
 enum WorkGlyph {
     enum Face: Hashable {
-        /// So many marks typed; a fraction grows the next dash.
+        /// So many capsules typed; a fraction grows the next one.
         case typing(Double)
-        /// The marks faint, filled from the left in reading order.
+        /// The capsules cut out faintly, then through, from the left in reading order.
         case filling(Double)
         case success
         case failure
@@ -194,28 +195,22 @@ enum WorkGlyph {
 
     static var markCount: Int { marks.count }
 
+    /// The check mark and the exclamation mark.
     private static let line: CGFloat = 1.5
+    /// The dot of the exclamation mark.
     private static let dot: CGFloat = 2.1
+    private static let thickness: CGFloat = 1
 
-    /// The marks in reading order, a dot has the same start and end; coordinates from the top left. The proportions
-    /// are the icon's: a dash 216 and a gap 58 of the 632 units of the sign, and inside the outline the sign is as wide
-    /// as in the icon (632 of the 824 units of the body). The rows sit on whole pixels.
+    /// The capsules in reading order, the centres of their round ends from the top left of the 16 pt square, so that a
+    /// capsule is a line from x0 to x1 with round caps. The icon's proportions (both lines 9 thicknesses wide, a short
+    /// capsule 7/3 of one, the gap one) rounded to whole pixels at 1x: lines 9 pt wide, a capsule 2 pt long, a gap of
+    /// 1 pt, a long capsule up to the end, under it the same turned round, the lines 2 pt apart.
     private static let marks: [(x0: CGFloat, x1: CGFloat, y: CGFloat)] = {
-        let width: CGFloat = 9.6, gap: CGFloat = 0.9
-        let dash = (width - dot - 2 * gap) / 2
-        let top: CGFloat = 6.25, bottom: CGFloat = 9.75
-        var x = 8 - width / 2
-        var marks: [(x0: CGFloat, x1: CGFloat, y: CGFloat)] = []
-        for _ in 0..<2 {
-            marks.append((x + line / 2, x + dash - line / 2, top))
-            x += dash + gap
-        }
-        marks.append((x + dot / 2, x + dot / 2, top))
-        x = 8 - (dot + gap + dash) / 2
-        marks.append((x + dot / 2, x + dot / 2, bottom))
-        x += dot + gap
-        marks.append((x + line / 2, x + dash - line / 2, bottom))
-        return marks
+        let left: CGFloat = 3.5, width: CGFloat = 9, short: CGFloat = 2, gap: CGFloat = 1
+        let top: CGFloat = 6.5, bottom: CGFloat = 9.5
+        let end = thickness / 2, long = width - short - gap
+        return [(left + end, left + short - end, top), (left + short + gap + end, left + width - end, top),
+                (left + end, left + long - end, bottom), (left + long + gap + end, left + width - end, bottom)]
     }()
 
     /// One image per face: the menu bar keeps a drawn image, so a face that comes back costs nothing.
@@ -238,9 +233,10 @@ enum WorkGlyph {
 
     private static func draw(_ face: Face) {
         NSColor.black.set()
-        let outline = squircle(NSRect(x: 1.75, y: 1.75, width: 12.5, height: 12.5))
-        outline.lineWidth = line
-        outline.stroke()
+        // The plate, as wide against its height as the badge and as round in the corners; everything drawn after it is
+        // cut out of it.
+        NSBezierPath(roundedRect: NSRect(x: 1, y: 3, width: 14, height: 10), xRadius: 1.5, yRadius: 1.5).fill()
+        NSGraphicsContext.current?.compositingOperation = .destinationOut
         switch face {
         case .typing(let typed):
             for (index, mark) in marks.enumerated() {
@@ -248,7 +244,7 @@ enum WorkGlyph {
                 if amount > 0 { drawMark(mark, length: amount) }
             }
         case .filling(let progress):
-            let lengths = marks.map { $0.x0 == $0.x1 ? dot : $0.x1 - $0.x0 + line }
+            let lengths = marks.map { $0.x1 - $0.x0 + thickness }
             let total = lengths.reduce(0, +)
             var before: CGFloat = 0
             for (index, mark) in marks.enumerated() {
@@ -257,8 +253,7 @@ enum WorkGlyph {
                 let filled = min(1, max(0, (CGFloat(progress) * total - before) / lengths[index]))
                 if filled > 0 {
                     NSGraphicsContext.saveGraphicsState()
-                    let left = mark.x0 == mark.x1 ? mark.x0 - dot / 2 : mark.x0 - line / 2
-                    NSRect(x: left, y: 0, width: lengths[index] * filled, height: 16).clip()
+                    NSRect(x: mark.x0 - thickness / 2, y: 0, width: lengths[index] * filled, height: 16).clip()
                     NSColor.black.set()
                     drawMark(mark, length: 1)
                     NSGraphicsContext.restoreGraphicsState()
@@ -266,43 +261,25 @@ enum WorkGlyph {
                 before += lengths[index]
             }
         case .success:
-            stroke([NSPoint(x: 5, y: 8.25), NSPoint(x: 7.25, y: 10.5), NSPoint(x: 11, y: 5.75)])
+            stroke([NSPoint(x: 5, y: 8.25), NSPoint(x: 7.25, y: 10.5), NSPoint(x: 11, y: 5.75)], width: line)
         case .failure:
-            stroke([NSPoint(x: 8, y: 4.75), NSPoint(x: 8, y: 8.75)])
-            NSBezierPath(ovalIn: NSRect(x: 8 - dot / 2, y: 11 - dot / 2, width: dot, height: dot)).fill()
+            stroke([NSPoint(x: 8, y: 5.25), NSPoint(x: 8, y: 8)], width: line)
+            NSBezierPath(ovalIn: NSRect(x: 8 - dot / 2, y: 10.5 - dot / 2, width: dot, height: dot)).fill()
         }
     }
 
     private static func drawMark(_ mark: (x0: CGFloat, x1: CGFloat, y: CGFloat), length: Double) {
-        if mark.x0 == mark.x1 {
-            NSBezierPath(ovalIn: NSRect(x: mark.x0 - dot / 2, y: mark.y - dot / 2, width: dot, height: dot)).fill()
-        } else {
-            stroke([NSPoint(x: mark.x0, y: mark.y), NSPoint(x: mark.x0 + (mark.x1 - mark.x0) * CGFloat(length), y: mark.y)])
-        }
+        stroke([NSPoint(x: mark.x0, y: mark.y), NSPoint(x: mark.x0 + (mark.x1 - mark.x0) * CGFloat(length), y: mark.y)],
+               width: thickness)
     }
 
-    private static func stroke(_ points: [NSPoint]) {
+    private static func stroke(_ points: [NSPoint], width: CGFloat) {
         let path = NSBezierPath()
         path.move(to: points[0])
         points.dropFirst().forEach { path.line(to: $0) }
-        path.lineWidth = line
+        path.lineWidth = width
         path.lineCapStyle = .round
         path.lineJoinStyle = .round
         path.stroke()
-    }
-
-    /// The body of the app icon (scripts/make_icon.swift): a superellipse with exponent 5.
-    private static func squircle(_ rect: NSRect, exponent: CGFloat = 5) -> NSBezierPath {
-        let path = NSBezierPath()
-        let a = rect.width / 2, b = rect.height / 2
-        for step in 0...360 {
-            let t = CGFloat(step) / 360 * 2 * .pi
-            let c = cos(t), s = sin(t)
-            let point = NSPoint(x: rect.midX + a * (c < 0 ? -1 : 1) * pow(abs(c), 2 / exponent),
-                                y: rect.midY + b * (s < 0 ? -1 : 1) * pow(abs(s), 2 / exponent))
-            if step == 0 { path.move(to: point) } else { path.line(to: point) }
-        }
-        path.close()
-        return path
     }
 }
