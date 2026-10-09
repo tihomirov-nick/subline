@@ -407,14 +407,18 @@ public final class CueRenderer {
     // MARK: Bitmaps
 
     /// A transparent RGBA bitmap context of `pixelSize` whose user space is the video frame
-    /// (top-left origin, video pixels).
-    public static func makeContext(canvas: CGSize, pixelSize: CGSize) -> CGContext? {
+    /// (top-left origin, video pixels). `forScreen` lays the pixels out the way the screen takes them (BGRA), so
+    /// showing the image does not copy it again on the main thread.
+    public static func makeContext(canvas: CGSize, pixelSize: CGSize, forScreen: Bool = false) -> CGContext? {
         let width = max(1, Int(pixelSize.width.rounded()))
         let height = max(1, Int(pixelSize.height.rounded()))
+        let layout = forScreen
+            ? CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+            : CGImageAlphaInfo.premultipliedLast.rawValue
         guard let context = CGContext(
             data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
             space: CGColorSpace(name: CGColorSpace.sRGB)!,
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            bitmapInfo: layout
         ) else { return nil }
         context.translateBy(x: 0, y: CGFloat(height))
         context.scaleBy(x: CGFloat(width) / canvas.width, y: -CGFloat(height) / canvas.height)
@@ -425,9 +429,9 @@ public final class CueRenderer {
     }
 
     /// The subtitle on a transparent image (`outputScale` 1 = video resolution).
-    public func makeImage(_ cue: Cue, outputScale: CGFloat = 1) -> CGImage? {
+    public func makeImage(_ cue: Cue, outputScale: CGFloat = 1, forScreen: Bool = false) -> CGImage? {
         let pixelSize = CGSize(width: canvas.width * outputScale, height: canvas.height * outputScale)
-        guard let context = Self.makeContext(canvas: canvas, pixelSize: pixelSize) else { return nil }
+        guard let context = Self.makeContext(canvas: canvas, pixelSize: pixelSize, forScreen: forScreen) else { return nil }
         if let layout = layout(cue) {
             draw(layout, in: context, deviceScale: outputScale)
         }

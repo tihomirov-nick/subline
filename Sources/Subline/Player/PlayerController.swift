@@ -2,14 +2,24 @@ import Foundation
 import AVFoundation
 import SublineCore
 
+/// The playhead on its own. During playback it moves 60 times a second, so only the views that show the time watch
+/// it: the clock and the scrubber of the transport. Everything else reads `PlayerController.currentTime` when it
+/// draws for another reason.
+@MainActor
+final class PlaybackClock: ObservableObject {
+    @Published fileprivate(set) var time: Double = 0
+}
+
 /// Video playback for the preview: play/pause, frame stepping and precise scrubbing.
 /// Files AVFoundation cannot play (MKV, WebM, AVI, ...) get a playable copy made with ffmpeg in the background.
 @MainActor
 final class PlayerController: ObservableObject {
     let player = AVPlayer()
+    let clock = PlaybackClock()
 
     @Published private(set) var isPlaying = false
-    @Published private(set) var currentTime: Double = 0
+    /// Not published: the views that show it watch `clock`.
+    private(set) var currentTime: Double = 0
     @Published private(set) var duration: Double = 0
     /// A playable item is loaded and its first frame can be shown.
     @Published private(set) var isReady = false
@@ -73,6 +83,7 @@ final class PlayerController: ObservableObject {
         copyProgress = nil
         copyFailed = false
         currentTime = 0
+        clock.time = 0
         mediaURL = nil
     }
 
@@ -230,7 +241,18 @@ final class PlayerController: ObservableObject {
     private func setTime(_ seconds: Double) {
         guard abs(seconds - currentTime) > 0.0001 else { return }
         currentTime = seconds
+        clock.time = seconds
         onTimeChange?(seconds)
+    }
+
+    /// Tests: a step of playback as the periodic time observer reports it, without AVPlayer playing.
+    func tickForTesting(_ seconds: Double) {
+        setTime(seconds)
+    }
+
+    /// Tests: playing or paused as the views see it.
+    func setPlayingForTesting(_ playing: Bool) {
+        isPlaying = playing
     }
 
     /// Frame number at the current time (for the transport display).

@@ -118,6 +118,7 @@
 "Закрыть окно" = "Close Window";
 "Скрыть стиль" = "Hide Style";
 "Показать стиль" = "Show Style";
+"Справка Subline" = "Subline Help";
 "Воспроизведение" = "Playback";
 "Пауза" = "Pause";
 "Воспроизвести" = "Play";
@@ -148,7 +149,6 @@
 "Удалить выбранные субтитры" = "Delete Selected Subtitles";
 "Удалить субтитр" = "Delete Subtitle";
 "Модели распознавания…" = "Recognition Models…";
-"Справка Subline" = "Subline Help";
 "Формат превью" = "Preview format";
 "Пропорции кадра, пока видео не открыто" = "Frame proportions until a video is open";
 "Пример текста" = "Sample text";
@@ -409,9 +409,6 @@
 "Начало" = "Start";
 "Конец" = "End";
 "У субтитра свой стиль" = "This subtitle has its own style";
-"Первое слово в предыдущий субтитр (⌥⌘↑)" = "First word to the previous subtitle (⌥⌘↑)";
-"Последнее слово в следующий субтитр (⌥⌘↓)" = "Last word to the next subtitle (⌥⌘↓)";
-"Действия с субтитром" = "Actions for this subtitle";
 "Субтитр с %@ до %@" = "Subtitle from %@ to %@";
 "на текущем кадре" = "on the current frame";
 "Разделить по текстовому курсору" = "Split at Text Cursor";
@@ -420,6 +417,9 @@
 "Добавить в группу" = "Add to Group";
 "Убрать из группы" = "Remove from Group";
 "Сбросить стиль субтитра" = "Reset Subtitle Style";
+"Первое слово в предыдущий субтитр (⌥⌘↑)" = "First word to the previous subtitle (⌥⌘↑)";
+"Последнее слово в следующий субтитр (⌥⌘↓)" = "Last word to the next subtitle (⌥⌘↓)";
+"Действия с субтитром" = "Actions for this subtitle";
 "Разделить субтитр на два, каждый в заданное число строк. Время поделится по словам" = "Split the subtitle into two that each fit the set number of lines. The time is divided by the words";
 "Не помещается в одну строку" = "Doesn’t fit on one line";
 "Не помещается в две строки" = "Doesn’t fit on two lines";

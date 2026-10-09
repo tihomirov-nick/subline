@@ -188,7 +188,9 @@ private struct FontRow: View {
 // MARK: - Time
 
 /// Editable time value in the format of the video ("0:12.48", or "0:00:12.48" for an hour or longer), as wide as the
-/// longest time of that format.
+/// longest time of that format. It is plain text until clicked: a text field in every row of a long list made each row
+/// take milliseconds to appear while scrolling. A click (or VoiceOver's action) turns it into the field, focused, with
+/// the time selected; Return, Esc or a click elsewhere turns it back.
 struct TimeField: View {
     let value: Double
     var format = ClockFormat(duration: 0)
@@ -197,45 +199,85 @@ struct TimeField: View {
     var highlighted = false
     var onBeginEditing: (() -> Void)?
     let onCommit: (Double) -> Void
-    @State private var text = ""
-    @FocusState private var focused: Bool
+    @State private var editing = false
 
     static let fontSize: CGFloat = 11
 
     var body: some View {
+        if editing {
+            TimeFieldEditor(value: value, format: format, label: label, onBeginEditing: onBeginEditing, onCommit: onCommit) {
+                editing = false
+            }
+        } else {
+            Text(format.string(value))
+                .font(.system(size: Self.fontSize, weight: .medium).monospacedDigit())
+                .foregroundStyle(highlighted ? Color.white : Palette.secondary)
+                .lineLimit(1)
+                .frame(width: format.width(size: Self.fontSize, weight: .medium), alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture { editing = true }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(label)
+                .accessibilityValue(format.string(value))
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { editing = true }
+        }
+    }
+}
+
+/// The field of a time being edited: it takes the keyboard as it appears and commits when it loses it.
+private struct TimeFieldEditor: View {
+    let value: Double
+    let format: ClockFormat
+    let label: String
+    let onBeginEditing: (() -> Void)?
+    let onCommit: (Double) -> Void
+    let onEnd: () -> Void
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
         TextField("", text: $text)
             .textFieldStyle(.plain)
-            .font(.system(size: Self.fontSize, weight: .medium).monospacedDigit())
-            .foregroundStyle(highlighted ? Color.white : Palette.secondary)
-            .frame(width: format.width(size: Self.fontSize, weight: .medium))
+            .font(.system(size: TimeField.fontSize, weight: .medium).monospacedDigit())
+            .foregroundStyle(Color.white)
+            .frame(width: format.width(size: TimeField.fontSize, weight: .medium))
             .focused($focused)
             .accessibilityLabel(label)
-            .onAppear { text = format.string(value) }
-            .onChange(of: value) { newValue in
-                if !focused { text = format.string(newValue) }
-            }
-            .onChange(of: format) { newFormat in
-                if !focused { text = newFormat.string(value) }
+            .onAppear {
+                text = format.string(value)
+                focused = true
             }
             .onChange(of: focused) { isFocused in
-                if isFocused { onBeginEditing?() } else { commit() }
+                if isFocused {
+                    onBeginEditing?()
+                } else {
+                    commit()
+                    onEnd()
+                }
             }
-            .onSubmit { commit() }
+            // Return ends editing; losing the keyboard commits (Return, Esc, a click elsewhere).
+            .onSubmit { focused = false }
     }
 
     private func commit() {
         if let parsed = parseTimecode(text), abs(parsed - value) > 0.0005 {
             onCommit(parsed)
-        } else {
-            text = format.string(value)
         }
     }
 }
 
 extension ClockFormat {
-    /// The width of the longest time of this format in the monospaced digits of the system font.
-    func width(size: CGFloat, weight: NSFont.Weight) -> CGFloat {
+    @MainActor private static var widths: [String: CGFloat] = [:]
+
+    /// The width of the longest time of this format in the monospaced digits of the system font (measured once per
+    /// format, size and weight: the rows and the transport ask for it every time they draw).
+    @MainActor func width(size: CGFloat, weight: NSFont.Weight) -> CGFloat {
+        let key = "\(widest)|\(size)|\(weight.rawValue)"
+        if let width = Self.widths[key] { return width }
         let font = NSFont.monospacedDigitSystemFont(ofSize: size, weight: weight)
-        return ceil((widest as NSString).size(withAttributes: [.font: font]).width) + 3
+        let width = ceil((widest as NSString).size(withAttributes: [.font: font]).width) + 3
+        Self.widths[key] = width
+        return width
     }
 }

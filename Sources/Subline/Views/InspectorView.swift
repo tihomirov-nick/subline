@@ -5,22 +5,35 @@ import SublineCore
 /// are in pixels of the current frame. The controls at the top choose what the cards below change.
 struct InspectorView: View {
     @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        let _ = RenderCount.hit("InspectorView")
+        InspectorContent(model: model, playheadCue: model.playheadCue)
+    }
+}
+
+/// Watches the model and the subtitle under the playhead (the scope can be that subtitle) and gathers what each part
+/// shows into a value. A part redraws only when its value differs: typing a subtitle's text or playing the video
+/// leaves the cards alone, a style change redraws the cards, not the preset bar.
+private struct InspectorContent: View {
+    @ObservedObject var model: AppModel
+    @ObservedObject var playheadCue: PlayheadCue
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        let _ = RenderCount.hit("InspectorContent")
+        let style = StyleInputs(model)
         VStack(spacing: 0) {
             VStack(spacing: 8) {
                 if model.hasMedia && !model.hasVideo {
                     AudioNote()
                 }
-                PresetBar()
-                ScopeBar()
-                Segments(selection: $model.inspectorTab,
-                         items: InspectorTab.allCases.map { tab in
-                             SegmentItem(tab, tab.title, help: tab == .layout && model.scope == .words ? L("У слов нет своего макета") : nil,
-                                         enabled: tab != .layout || model.scope != .words)
-                         },
-                         fill: true, large: true)
+                PresetBar(model: model, inputs: PresetInputs(model))
+                    .equatable()
+                ScopeBar(model: model, inputs: ScopeInputs(model))
+                    .equatable()
+                TabBar(model: model, tab: model.inspectorTab, words: model.scope == .words)
+                    .equatable()
             }
             .padding([.horizontal, .top], Metrics.inset)
             .padding(.bottom, 10)
@@ -28,26 +41,157 @@ struct InspectorView: View {
                 .padding(.horizontal, Metrics.inset)
             ScrollView {
                 ZStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 14) {
-                        switch effectiveTab {
-                        case .text: TextTab()
-                        case .layout: LayoutTab()
-                        case .effects: EffectsTab()
-                        }
-                    }
-                    .padding(Metrics.inset)
-                    .id(effectiveTab)
-                    .transition(.reveal(reduceMotion: reduceMotion))
+                    InspectorTabs(model: model, inputs: style)
+                        .equatable()
+                        .id(style.tab)
+                        .transition(.reveal(reduceMotion: reduceMotion))
                 }
             }
             .softTopEdge()
-            .animation(Motion.animation(Motion.island, reduceMotion: reduceMotion), value: effectiveTab)
+            .animation(Motion.animation(Motion.island, reduceMotion: reduceMotion), value: style.tab)
         }
     }
+}
 
+/// Text, layout, effects. Words have no layout of their own.
+private struct TabBar: View, Equatable {
+    let model: AppModel
+    let tab: InspectorTab
+    let words: Bool
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.model === rhs.model && lhs.tab == rhs.tab && lhs.words == rhs.words
+    }
+
+    var body: some View {
+        let _ = RenderCount.hit("TabBar")
+        Segments(selection: Binding(get: { model.inspectorTab }, set: { model.inspectorTab = $0 }),
+                 items: InspectorTab.allCases.map { tab in
+                     SegmentItem(tab, tab.title, help: tab == .layout && words ? L("У слов нет своего макета") : nil,
+                                 enabled: tab != .layout || !words)
+                 },
+                 fill: true, large: true)
+    }
+}
+
+/// What the cards of the style show: the style and the overrides of the scope, the frame, the fonts.
+private struct StyleInputs: Equatable {
+    let style: SubtitlePreset
+    /// The properties the scope changes (the bold titles and reset buttons), not their values: those are in `style`.
+    let overridden: Set<String>
+    /// Cutting into subtitles is a setting of the preset itself.
+    let preset: SubtitlePreset
+    let scope: EditScope
+    let wordSelection: WordSelection?
+    let wordCueExists: Bool
+    let canvas: CGSize
+    let hasVideo: Bool
+    let fontsVersion: Int
     /// Words have no layout of their own.
-    private var effectiveTab: InspectorTab {
-        model.scope == .words && model.inspectorTab == .layout ? .text : model.inspectorTab
+    let tab: InspectorTab
+
+    @MainActor init(_ model: AppModel) {
+        style = model.effectiveStyle
+        overridden = model.scopeOverride.map { override in
+            Set(Mirror(reflecting: override).children.compactMap { child in
+                child.label.flatMap { label in Mirror(reflecting: child.value).children.isEmpty ? nil : label }
+            })
+        } ?? []
+        preset = model.preset
+        scope = model.scope
+        wordSelection = model.wordSelection
+        wordCueExists = model.wordSelection.map { selection in model.cues.contains { $0.id == selection.cueID } } ?? false
+        canvas = model.canvasSize
+        hasVideo = model.hasVideo
+        fontsVersion = model.fontsVersion
+        tab = model.scope == .words && model.inspectorTab == .layout ? .text : model.inspectorTab
+    }
+}
+
+/// What the preset bar shows.
+private struct PresetInputs: Equatable {
+    let presets: [UUID]
+    let names: [String]
+    let selected: UUID
+
+    @MainActor init(_ model: AppModel) {
+        presets = model.presets.map(\.id)
+        names = model.presets.map(\.name)
+        selected = model.selectedPresetID
+    }
+}
+
+/// What the scope switcher shows.
+private struct ScopeInputs: Equatable {
+    let scope: EditScope
+    let title: String
+    let hasOverrides: Bool
+    let groupColor: RGBAColor?
+    let contextGroupID: UUID?
+    let canEditCues: Bool
+    let severalSelected: Bool
+    let hasWordSelection: Bool
+
+    @MainActor init(_ model: AppModel) {
+        scope = model.scope
+        title = model.scopeTitle
+        hasOverrides = model.scopeHasOverrides
+        if case .group(let id) = model.scope { groupColor = model.group(id)?.color } else { groupColor = nil }
+        contextGroupID = model.contextGroupID
+        canEditCues = model.hasMedia && !model.scopeCueIDs.isEmpty
+        severalSelected = model.selectedCueIDs.count > 1
+        hasWordSelection = model.wordSelection != nil
+    }
+}
+
+/// A part of a tab (a card, a section) drawn again only when its own style properties change, or what every part
+/// depends on: the scope and what it overrides, the frame (pixel values), the fonts. Dragging the size slider redraws
+/// the size row, not the whole tab.
+private struct StylePart<Content: View>: View, Equatable {
+    let key: [AnyHashable]
+    @ViewBuilder let content: () -> Content
+
+    @MainActor init(_ inputs: StyleInputs, _ properties: [PartialKeyPath<SubtitlePreset>], extra: [AnyHashable] = [],
+                    @ViewBuilder content: @escaping () -> Content) {
+        var key: [AnyHashable] = [AnyHashable(inputs.overridden), AnyHashable(inputs.canvas.width), AnyHashable(inputs.canvas.height),
+                                  AnyHashable(inputs.fontsVersion), AnyHashable(inputs.hasVideo), AnyHashable(inputs.wordCueExists)]
+        key.append(AnyHashable(String(describing: inputs.scope)))
+        key.append(AnyHashable(inputs.wordSelection.map { "\($0.cueID)\($0.indices.sorted())" } ?? ""))
+        for property in properties {
+            if let value = inputs.style[keyPath: property] as? AnyHashable { key.append(value) }
+        }
+        self.key = key + extra
+        self.content = content
+    }
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.key == rhs.key
+    }
+
+    var body: some View {
+        content()
+    }
+}
+
+/// The cards of the current tab.
+private struct InspectorTabs: View, Equatable {
+    let model: AppModel
+    let inputs: StyleInputs
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.model === rhs.model && lhs.inputs == rhs.inputs
+    }
+
+    var body: some View {
+        let _ = RenderCount.hit("InspectorTabs")
+        VStack(alignment: .leading, spacing: 14) {
+            switch inputs.tab {
+            case .text: TextTab(model: model, inputs: inputs)
+            case .layout: LayoutTab(model: model, inputs: inputs)
+            case .effects: EffectsTab(model: model, inputs: inputs)
+            }
+        }
+        .padding(Metrics.inset)
     }
 }
 
@@ -74,14 +218,20 @@ private struct AudioNote: View {
 
 // MARK: - Preset
 
-private struct PresetBar: View {
-    @EnvironmentObject var model: AppModel
+private struct PresetBar: View, Equatable {
+    let model: AppModel
+    let inputs: PresetInputs
     @State private var isRenaming = false
     @State private var newName = ""
     @State private var confirmDelete = false
     @State private var hovering = false
 
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.model === rhs.model && lhs.inputs == rhs.inputs
+    }
+
     var body: some View {
+        let _ = RenderCount.hit("PresetBar")
         HStack(spacing: 8) {
             MenuButton(entries: {
                 model.presets.map { preset in
@@ -146,10 +296,16 @@ private struct PresetBar: View {
 private enum ScopeKind: Hashable { case all, group, cues, words }
 
 /// Where the changes go: the preset, a group, subtitles or words.
-private struct ScopeBar: View {
-    @EnvironmentObject var model: AppModel
+private struct ScopeBar: View, Equatable {
+    let model: AppModel
+    let inputs: ScopeInputs
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.model === rhs.model && lhs.inputs == rhs.inputs
+    }
 
     var body: some View {
+        let _ = RenderCount.hit("ScopeBar")
         VStack(spacing: 6) {
             Segments(selection: Binding(get: { currentKind }, set: { select($0) }),
                      items: [ScopeKind.all, .group, .cues, .words].map { kind in
@@ -161,13 +317,13 @@ private struct ScopeBar: View {
                     .fill(scopeColor)
                     .frame(width: 7, height: 7)
                     .accessibilityHidden(true)
-                Text(model.scopeTitle)
+                Text(inputs.title)
                     .font(.system(size: 11.5, weight: .medium))
                     .foregroundStyle(Palette.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 4)
-                if model.scopeHasOverrides {
+                if inputs.hasOverrides {
                     Button(L("Сбросить")) { model.resetScopeStyle() }
                         .appButton(.secondary)
                         .controlSize(.mini)
@@ -180,7 +336,7 @@ private struct ScopeBar: View {
     }
 
     private var currentKind: ScopeKind {
-        switch model.scope {
+        switch inputs.scope {
         case .all: return .all
         case .group: return .group
         case .cues: return .cues
@@ -189,15 +345,15 @@ private struct ScopeBar: View {
     }
 
     private var scopeColor: Color {
-        if case .group(let id) = model.scope, let group = model.group(id) { return group.color.color }
-        return model.scope == .all ? Palette.tertiary : Color.white
+        if let color = inputs.groupColor { return color.color }
+        return inputs.scope == .all ? Palette.tertiary : Color.white
     }
 
     private func title(_ kind: ScopeKind) -> String {
         switch kind {
         case .all: return L("Все")
         case .group: return L("Группа")
-        case .cues: return model.selectedCueIDs.count > 1 ? L("Выбранные") : L("Субтитр")
+        case .cues: return inputs.severalSelected ? L("Выбранные") : L("Субтитр")
         case .words: return L("Слова")
         }
     }
@@ -205,9 +361,9 @@ private struct ScopeBar: View {
     private func isEnabled(_ kind: ScopeKind) -> Bool {
         switch kind {
         case .all: return true
-        case .group: return model.contextGroupID != nil
-        case .cues: return model.hasMedia && !model.scopeCueIDs.isEmpty
-        case .words: return model.wordSelection != nil
+        case .group: return inputs.contextGroupID != nil
+        case .cues: return inputs.canEditCues
+        case .words: return inputs.hasWordSelection
         }
     }
 
@@ -215,7 +371,7 @@ private struct ScopeBar: View {
         switch kind {
         case .all: return L("Менять общий стиль всех субтитров")
         case .group:
-            return model.contextGroupID == nil ? L("Выделите субтитры одной группы или создайте группу (⌘G)") : L("Стиль группы")
+            return inputs.contextGroupID == nil ? L("Выделите субтитры одной группы или создайте группу (⌘G)") : L("Стиль группы")
         case .cues: return L("Только выбранные субтитры (или тот, что на текущем кадре)")
         case .words: return L("Щёлкните слово на видео, с ⇧ можно выбрать несколько. Стиль слов сохраняется при правке текста")
         }
@@ -305,56 +461,76 @@ private struct SliderRow: View {
 // MARK: - Text
 
 private struct TextTab: View {
-    @EnvironmentObject var model: AppModel
+    let model: AppModel
+    /// Its values: the tab redraws when they change.
+    let inputs: StyleInputs
 
     var body: some View {
         let style = model.effectiveStyle
         let words = model.scope == .words
         if !words {
-            StyleSection(L("Регистр и знаки"), onReset: model.isOverridden(\.caseMode) ? { model.resetStyle(\.caseMode) } : nil) {
-                Segments(selection: model.binding(\.caseMode, \.caseMode),
-                         items: TextCaseMode.allCases.map { SegmentItem($0, $0.shortTitle, help: $0.title) },
-                         fill: true, large: true)
-            }
-        }
-        StyleSection(L("Шрифт"), onReset: model.isOverridden(\.fontFamily) ? {
-            model.resetStyle(\.fontFamily)
-            model.resetStyle(\.fontFace)
-        } : nil) {
-            VStack(spacing: 0) {
-                FontFamilyPicker(family: model.binding(\.fontFamily, \.fontFamily), fontsVersion: model.fontsVersion,
-                                 warning: fontWarning(style))
-                    .padding(6)
-                Separator()
-                MenuRow(title: L("Начертание"), changed: model.isOverridden(\.fontFace), onReset: { model.resetStyle(\.fontFace) },
-                        value: style.fontFace) {
-                    faceNames(style.fontFamily, current: style.fontFace).map { name in
-                        .item(name, checked: name == style.fontFace) { model.setStyle(\.fontFace, \.fontFace, name) }
-                    }
+            StylePart(inputs, [\.caseMode]) {
+                StyleSection(L("Регистр и знаки"), onReset: model.isOverridden(\.caseMode) ? { model.resetStyle(\.caseMode) } : nil) {
+                    Segments(selection: model.binding(\.caseMode, \.caseMode),
+                             items: TextCaseMode.allCases.map { SegmentItem($0, $0.shortTitle, help: $0.title) },
+                             fill: true, large: true)
                 }
-                Separator()
-                WeightRow()
             }
-            .card()
+            .equatable()
         }
-        TileGrid {
-            Tile(symbol: "italic", title: L("Курсив"), on: model.italicBinding.wrappedValue,
-                 help: L("Курсивное начертание шрифта, а если его нет, наклон")) {
-                model.italicBinding.wrappedValue.toggle()
-            }
-            Tile(symbol: "textformat.size.larger", title: L("Заглавные"), on: style.uppercase, help: L("Все буквы заглавные")) {
-                model.binding(\.uppercase, \.uppercase).wrappedValue.toggle()
+        StylePart(inputs, [\.fontFamily, \.fontFace]) {
+            StyleSection(L("Шрифт"), onReset: model.isOverridden(\.fontFamily) ? {
+                model.resetStyle(\.fontFamily)
+                model.resetStyle(\.fontFace)
+            } : nil) {
+                VStack(spacing: 0) {
+                    FontFamilyPicker(family: model.binding(\.fontFamily, \.fontFamily), fontsVersion: model.fontsVersion,
+                                     warning: fontWarning(style))
+                        .padding(6)
+                    Separator()
+                    MenuRow(title: L("Начертание"), changed: model.isOverridden(\.fontFace), onReset: { model.resetStyle(\.fontFace) },
+                            value: style.fontFace) {
+                        faceNames(style.fontFamily, current: style.fontFace).map { name in
+                            .item(name, checked: name == style.fontFace) { model.setStyle(\.fontFace, \.fontFace, name) }
+                        }
+                    }
+                    Separator()
+                    WeightRow(model: model, style: inputs.style)
+                }
+                .card()
             }
         }
+        .equatable()
+        StylePart(inputs, [\.fontFamily, \.fontFace, \.slant, \.uppercase]) {
+            TileGrid {
+                Tile(symbol: "italic", title: L("Курсив"), on: model.italicBinding.wrappedValue,
+                     help: L("Курсивное начертание шрифта, а если его нет, наклон")) {
+                    model.italicBinding.wrappedValue.toggle()
+                }
+                Tile(symbol: "textformat.size.larger", title: L("Заглавные"), on: style.uppercase, help: L("Все буквы заглавные")) {
+                    model.binding(\.uppercase, \.uppercase).wrappedValue.toggle()
+                }
+            }
+        }
+        .equatable()
         VStack(spacing: 0) {
-            SliderRow(title: L("Размер"), value: model.pixels(\.fontSize, \.fontSize),
-                      range: 8...max(400, (model.frameHeight * 0.25).rounded()),
-                      changed: model.isOverridden(\.fontSize), onReset: { model.resetStyle(\.fontSize) })
+            StylePart(inputs, [\.fontSize]) {
+                SliderRow(title: L("Размер"), value: model.pixels(\.fontSize, \.fontSize),
+                          range: 8...max(400, (model.frameHeight * 0.25).rounded()),
+                          changed: model.isOverridden(\.fontSize), onReset: { model.resetStyle(\.fontSize) })
+            }
+            .equatable()
             Separator()
-            SliderRow(title: L("Наклон"), value: model.binding(\.slant, \.slant), range: -30...30, unit: "°",
-                      changed: model.isOverridden(\.slant), onReset: { model.resetStyle(\.slant) })
+            StylePart(inputs, [\.slant]) {
+                SliderRow(title: L("Наклон"), value: model.binding(\.slant, \.slant), range: -30...30, unit: "°",
+                          changed: model.isOverridden(\.slant), onReset: { model.resetStyle(\.slant) })
+            }
+            .equatable()
             Separator()
-            colorRow(model, L("Цвет текста"), \.textColor, \.textColor)
+            StylePart(inputs, [\.textColor]) {
+                colorRow(model, L("Цвет текста"), \.textColor, \.textColor)
+            }
+            .equatable()
         }
         .card()
         HStack(spacing: 8) {
@@ -371,20 +547,23 @@ private struct TextTab: View {
                 model.addFonts()
             }
         }
-        StyleSection(L("Интервалы")) {
-            VStack(spacing: 0) {
-                styleRow(model, L("Между буквами"), \.letterSpacing) {
-                    ValueField(value: model.pixels(\.letterSpacing, \.letterSpacing), range: -40...120)
-                }
-                if !words {
-                    Separator()
-                    styleRow(model, L("Между строками"), \.lineGap) {
-                        ValueField(value: model.pixels(\.lineGap, \.lineGap), range: -300...300)
+        StylePart(inputs, [\.letterSpacing, \.lineGap]) {
+            StyleSection(L("Интервалы")) {
+                VStack(spacing: 0) {
+                    styleRow(model, L("Между буквами"), \.letterSpacing) {
+                        ValueField(value: model.pixels(\.letterSpacing, \.letterSpacing), range: -40...120)
+                    }
+                    if !words {
+                        Separator()
+                        styleRow(model, L("Между строками"), \.lineGap) {
+                            ValueField(value: model.pixels(\.lineGap, \.lineGap), range: -300...300)
+                        }
                     }
                 }
+                .card()
             }
-            .card()
         }
+        .equatable()
         if words, let selection = model.wordSelection, let cue = model.cues.first(where: { $0.id == selection.cueID }) {
             Button(L("Выделить все слова субтитра")) {
                 model.selectAllWords(of: cue)
@@ -416,7 +595,8 @@ private struct TextTab: View {
 
 /// Weight as a slider over the faces the font really has (Thin … Black).
 private struct WeightRow: View {
-    @EnvironmentObject var model: AppModel
+    let model: AppModel
+    let style: SubtitlePreset
 
     var body: some View {
         let style = model.effectiveStyle
@@ -459,88 +639,103 @@ private struct WeightRow: View {
 // MARK: - Layout
 
 private struct LayoutTab: View {
-    @EnvironmentObject var model: AppModel
+    let model: AppModel
+    /// Its values: the tab redraws when they change.
+    let inputs: StyleInputs
 
     var body: some View {
-        StyleSection(L("Кадр")) {
-            Row(title: model.hasVideo ? L("Размер видео") : L("Формат превью"),
-                help: L("Все значения указаны в пикселях этого кадра. Для видео другого размера стиль масштабируется сам")) {
-                Text(verbatim: "\(Int(model.frameWidth)) × \(Int(model.frameHeight)) px")
-                    .font(.system(size: 12.5).monospacedDigit())
-                    .foregroundStyle(Palette.secondary)
-                    .lineLimit(1)
-            }
-            .card()
-        }
-        StyleSection(L("Строки"), onReset: model.isOverridden(\.maxLines) ? { model.resetStyle(\.maxLines) } : nil) {
-            Segments(selection: model.binding(\.maxLines, \.maxLines),
-                     items: [1, 2, 3].map { SegmentItem($0, $0 == 1 ? L("1 строка") : $0 == 2 ? L("2 строки") : L("3 строки")) },
-                     fill: true, large: true)
-            SliderRow(title: L("Ширина блока"), value: model.blockWidthPixels,
-                      range: (model.frameWidth * 0.1).rounded()...model.frameWidth,
-                      changed: model.isOverridden(\.maxWidth), onReset: { model.resetStyle(\.maxWidth) },
-                      help: L("Строки переносятся, когда упираются в эту ширину"))
+        StylePart(inputs, []) {
+            StyleSection(L("Кадр")) {
+                Row(title: model.hasVideo ? L("Размер видео") : L("Формат превью"),
+                    help: L("Все значения указаны в пикселях этого кадра. Для видео другого размера стиль масштабируется сам")) {
+                    Text(verbatim: "\(Int(model.frameWidth)) × \(Int(model.frameHeight)) px")
+                        .font(.system(size: 12.5).monospacedDigit())
+                        .foregroundStyle(Palette.secondary)
+                        .lineLimit(1)
+                }
                 .card()
-        }
-        StyleSection(L("Положение")) {
-            VStack(spacing: 0) {
-                styleRow(model, L("Привязка"), \.anchor) {
-                    Segments(selection: model.anchorKeepingPosition, items: [
-                        SegmentItem(.top, symbol: "align.vertical.top", help: L("Y отмечает верхний край текста")),
-                        SegmentItem(.center, symbol: "align.vertical.center", help: L("Y отмечает центр текста")),
-                        SegmentItem(.bottom, symbol: "align.vertical.bottom", help: L("Y отмечает нижний край текста")),
-                    ])
-                }
-                Separator()
-                styleRow(model, L("Выравнивание"), \.alignment) {
-                    Segments(selection: model.alignmentKeepingPosition, items: [
-                        SegmentItem(.left, symbol: "text.alignleft", help: L("X отмечает левый край текста")),
-                        SegmentItem(.center, symbol: "text.aligncenter", help: L("X отмечает центр текста")),
-                        SegmentItem(.right, symbol: "text.alignright", help: L("X отмечает правый край текста")),
-                    ])
-                }
-                Separator()
-                styleRow(model, "X", \.positionX) {
-                    ValueField(value: model.positionXPixels, range: 0...model.frameWidth)
-                }
-                Separator()
-                styleRow(model, "Y", \.positionY) {
-                    ValueField(value: model.positionYPixels, range: 0...model.frameHeight)
-                }
             }
-            .card()
-            HStack(spacing: 6) {
-                Button(L("Сверху")) { model.place(.top) }
-                Button(L("По центру")) { model.place(.center) }
-                Button(L("Снизу")) { model.place(.bottom) }
-                Spacer(minLength: 0)
-                IconButton(symbol: "arrow.left.and.line.vertical.and.arrow.right", help: L("Центрировать по горизонтали")) {
-                    model.centerHorizontally()
-                }
-            }
-            .appButton(.secondary)
-            .controlSize(.small)
-            .help(model.scope == .all
-                  ? L("Субтитры можно двигать мышью прямо на видео. Чтобы сдвинуть один субтитр, выберите «Субтитр» вверху")
-                  : L("Мышью на видео сдвигается только эта область"))
         }
-        if model.scope == .all {
-            StyleSection(L("Нарезка на субтитры")) {
+        .equatable()
+        StylePart(inputs, [\.maxLines, \.maxWidth]) {
+            StyleSection(L("Строки"), onReset: model.isOverridden(\.maxLines) ? { model.resetStyle(\.maxLines) } : nil) {
+                Segments(selection: model.binding(\.maxLines, \.maxLines),
+                         items: [1, 2, 3].map { SegmentItem($0, $0 == 1 ? L("1 строка") : $0 == 2 ? L("2 строки") : L("3 строки")) },
+                         fill: true, large: true)
+                SliderRow(title: L("Ширина блока"), value: model.blockWidthPixels,
+                          range: (model.frameWidth * 0.1).rounded()...model.frameWidth,
+                          changed: model.isOverridden(\.maxWidth), onReset: { model.resetStyle(\.maxWidth) },
+                          help: L("Строки переносятся, когда упираются в эту ширину"))
+                    .card()
+            }
+        }
+        .equatable()
+        StylePart(inputs, [\.anchor, \.alignment, \.positionX, \.positionY]) {
+            StyleSection(L("Положение")) {
                 VStack(spacing: 0) {
-                    MenuRow(title: L("Слов на экране"), value: wordLimitTitle(model.preset.maxWordsPerCue)) {
-                        ([0] + [1, 2, 3, 4, 5, 6, 7, 8, 10, 12]).map { count in
-                            .item(wordLimitTitle(count), checked: count == model.preset.maxWordsPerCue) {
-                                model.preset.maxWordsPerCue = count
-                            }
-                        }
+                    styleRow(model, L("Привязка"), \.anchor) {
+                        Segments(selection: model.anchorKeepingPosition, items: [
+                            SegmentItem(.top, symbol: "align.vertical.top", help: L("Y отмечает верхний край текста")),
+                            SegmentItem(.center, symbol: "align.vertical.center", help: L("Y отмечает центр текста")),
+                            SegmentItem(.bottom, symbol: "align.vertical.bottom", help: L("Y отмечает нижний край текста")),
+                        ])
                     }
                     Separator()
-                    Row(title: L("Макс. длительность")) {
-                        ValueField(value: $model.preset.maxCueDuration, range: 1...15, step: 0.5, unit: L("с"), fractionDigits: 1)
+                    styleRow(model, L("Выравнивание"), \.alignment) {
+                        Segments(selection: model.alignmentKeepingPosition, items: [
+                            SegmentItem(.left, symbol: "text.alignleft", help: L("X отмечает левый край текста")),
+                            SegmentItem(.center, symbol: "text.aligncenter", help: L("X отмечает центр текста")),
+                            SegmentItem(.right, symbol: "text.alignright", help: L("X отмечает правый край текста")),
+                        ])
+                    }
+                    Separator()
+                    styleRow(model, "X", \.positionX) {
+                        ValueField(value: model.positionXPixels, range: 0...model.frameWidth)
+                    }
+                    Separator()
+                    styleRow(model, "Y", \.positionY) {
+                        ValueField(value: model.positionYPixels, range: 0...model.frameHeight)
                     }
                 }
                 .card()
+                HStack(spacing: 6) {
+                    Button(L("Сверху")) { model.place(.top) }
+                    Button(L("По центру")) { model.place(.center) }
+                    Button(L("Снизу")) { model.place(.bottom) }
+                    Spacer(minLength: 0)
+                    IconButton(symbol: "arrow.left.and.line.vertical.and.arrow.right", help: L("Центрировать по горизонтали")) {
+                        model.centerHorizontally()
+                    }
+                }
+                .appButton(.secondary)
+                .controlSize(.small)
+                .help(model.scope == .all
+                      ? L("Субтитры можно двигать мышью прямо на видео. Чтобы сдвинуть один субтитр, выберите «Субтитр» вверху")
+                      : L("Мышью на видео сдвигается только эта область"))
             }
+        }
+        .equatable()
+        if model.scope == .all {
+            StylePart(inputs, [], extra: [AnyHashable(inputs.preset.maxWordsPerCue), AnyHashable(inputs.preset.maxCueDuration)]) {
+                StyleSection(L("Нарезка на субтитры")) {
+                    VStack(spacing: 0) {
+                        MenuRow(title: L("Слов на экране"), value: wordLimitTitle(model.preset.maxWordsPerCue)) {
+                            ([0] + [1, 2, 3, 4, 5, 6, 7, 8, 10, 12]).map { count in
+                                .item(wordLimitTitle(count), checked: count == model.preset.maxWordsPerCue) {
+                                    model.preset.maxWordsPerCue = count
+                                }
+                            }
+                        }
+                        Separator()
+                        Row(title: L("Макс. длительность")) {
+                            ValueField(value: Binding(get: { model.preset.maxCueDuration }, set: { model.preset.maxCueDuration = $0 }),
+                                       range: 1...15, step: 0.5, unit: L("с"), fractionDigits: 1)
+                        }
+                    }
+                    .card()
+                }
+            }
+            .equatable()
         }
     }
 
@@ -552,85 +747,102 @@ private struct LayoutTab: View {
 // MARK: - Effects
 
 private struct EffectsTab: View {
-    @EnvironmentObject var model: AppModel
+    let model: AppModel
+    /// Its values: the tab redraws when they change.
+    let inputs: StyleInputs
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let style = model.effectiveStyle
         let words = model.scope == .words
-        TileGrid {
-            Tile(symbol: "a.square", title: L("Обводка"), on: style.outlineEnabled, help: L("Контур вокруг букв")) {
-                toggle(model.binding(\.outlineEnabled, \.outlineEnabled))
-            }
-            if !words {
-                Tile(symbol: "square.filled.on.square", title: L("Тень"), on: style.shadowEnabled, help: L("Тень под текстом")) {
-                    toggle(model.binding(\.shadowEnabled, \.shadowEnabled))
+        StylePart(inputs, [\.outlineEnabled, \.shadowEnabled, \.highlightEnabled]) {
+            TileGrid {
+                Tile(symbol: "a.square", title: L("Обводка"), on: style.outlineEnabled, help: L("Контур вокруг букв")) {
+                    toggle(model.binding(\.outlineEnabled, \.outlineEnabled))
+                }
+                if !words {
+                    Tile(symbol: "square.filled.on.square", title: L("Тень"), on: style.shadowEnabled, help: L("Тень под текстом")) {
+                        toggle(model.binding(\.shadowEnabled, \.shadowEnabled))
+                    }
+                }
+                Tile(symbol: "highlighter", title: L("Подсветка"), on: style.highlightEnabled,
+                     help: words ? L("Цветной фон под выбранными словами") : L("Цветной фон под каждым словом")) {
+                    toggle(model.highlightBinding)
                 }
             }
-            Tile(symbol: "highlighter", title: L("Подсветка"), on: style.highlightEnabled,
-                 help: words ? L("Цветной фон под выбранными словами") : L("Цветной фон под каждым словом")) {
-                toggle(model.highlightBinding)
-            }
         }
+        .equatable()
         if style.outlineEnabled {
-            StyleSection(L("Обводка")) {
-                VStack(spacing: 0) {
-                    colorRow(model, L("Цвет"), \.outlineColor, \.outlineColor)
-                    Separator()
-                    styleRow(model, L("Толщина"), \.outlineWidth) {
-                        ValueField(value: model.pixels(\.outlineWidth, \.outlineWidth), range: 1...80)
-                    }
-                }
-                .card()
-            }
-            .transition(.reveal(reduceMotion: reduceMotion))
-        }
-        if style.shadowEnabled && !words {
-            StyleSection(L("Тень")) {
-                VStack(spacing: 0) {
-                    colorRow(model, L("Цвет"), \.shadowColor, \.shadowColor)
-                    Separator()
-                    styleRow(model, L("Размытие"), \.shadowBlur) {
-                        ValueField(value: model.pixels(\.shadowBlur, \.shadowBlur), range: 0...200)
-                    }
-                    Separator()
-                    styleRow(model, L("Смещение X"), \.shadowOffsetX) {
-                        ValueField(value: model.pixels(\.shadowOffsetX, \.shadowOffsetX), range: -200...200)
-                    }
-                    Separator()
-                    styleRow(model, L("Смещение Y"), \.shadowOffsetY) {
-                        ValueField(value: model.pixels(\.shadowOffsetY, \.shadowOffsetY), range: -200...200)
-                    }
-                }
-                .card()
-            }
-            .transition(.reveal(reduceMotion: reduceMotion))
-        }
-        if style.highlightEnabled {
-            HighlightSection()
-                .transition(.reveal(reduceMotion: reduceMotion))
-        }
-        if !words {
-            StyleSection(L("Подложка"), onReset: model.isOverridden(\.boxMode) ? { model.resetStyle(\.boxMode) } : nil) {
-                Segments(selection: model.binding(\.boxMode, \.boxMode),
-                         items: BoxMode.allCases.map { SegmentItem($0, $0.title, help: boxHelp($0)) },
-                         fill: true, large: true)
-                if style.boxMode != .none {
+            StylePart(inputs, [\.outlineColor, \.outlineWidth]) {
+                StyleSection(L("Обводка")) {
                     VStack(spacing: 0) {
-                        colorRow(model, L("Цвет"), \.boxColor, \.boxColor)
+                        colorRow(model, L("Цвет"), \.outlineColor, \.outlineColor)
                         Separator()
-                        styleRow(model, L("Отступы"), \.boxPadding) {
-                            ValueField(value: model.pixels(\.boxPadding, \.boxPadding), range: 0...200)
-                        }
-                        Separator()
-                        styleRow(model, L("Скругление"), \.boxCornerRadius) {
-                            ValueField(value: model.pixels(\.boxCornerRadius, \.boxCornerRadius), range: 0...200)
+                        styleRow(model, L("Толщина"), \.outlineWidth) {
+                            ValueField(value: model.pixels(\.outlineWidth, \.outlineWidth), range: 1...80)
                         }
                     }
                     .card()
-                    .transition(.reveal(reduceMotion: reduceMotion))
                 }
             }
+            .equatable()
+            .transition(.reveal(reduceMotion: reduceMotion))
+        }
+        if style.shadowEnabled && !words {
+            StylePart(inputs, [\.shadowColor, \.shadowBlur, \.shadowOffsetX, \.shadowOffsetY]) {
+                StyleSection(L("Тень")) {
+                    VStack(spacing: 0) {
+                        colorRow(model, L("Цвет"), \.shadowColor, \.shadowColor)
+                        Separator()
+                        styleRow(model, L("Размытие"), \.shadowBlur) {
+                            ValueField(value: model.pixels(\.shadowBlur, \.shadowBlur), range: 0...200)
+                        }
+                        Separator()
+                        styleRow(model, L("Смещение X"), \.shadowOffsetX) {
+                            ValueField(value: model.pixels(\.shadowOffsetX, \.shadowOffsetX), range: -200...200)
+                        }
+                        Separator()
+                        styleRow(model, L("Смещение Y"), \.shadowOffsetY) {
+                            ValueField(value: model.pixels(\.shadowOffsetY, \.shadowOffsetY), range: -200...200)
+                        }
+                    }
+                    .card()
+                }
+            }
+            .equatable()
+            .transition(.reveal(reduceMotion: reduceMotion))
+        }
+        if style.highlightEnabled {
+            StylePart(inputs, [\.highlightColor]) {
+                HighlightSection(model: model, style: inputs.style)
+            }
+            .equatable()
+                .transition(.reveal(reduceMotion: reduceMotion))
+        }
+        if !words {
+            StylePart(inputs, [\.boxMode, \.boxColor, \.boxPadding, \.boxCornerRadius]) {
+                StyleSection(L("Подложка"), onReset: model.isOverridden(\.boxMode) ? { model.resetStyle(\.boxMode) } : nil) {
+                    Segments(selection: model.binding(\.boxMode, \.boxMode),
+                             items: BoxMode.allCases.map { SegmentItem($0, $0.title, help: boxHelp($0)) },
+                             fill: true, large: true)
+                    if style.boxMode != .none {
+                        VStack(spacing: 0) {
+                            colorRow(model, L("Цвет"), \.boxColor, \.boxColor)
+                            Separator()
+                            styleRow(model, L("Отступы"), \.boxPadding) {
+                                ValueField(value: model.pixels(\.boxPadding, \.boxPadding), range: 0...200)
+                            }
+                            Separator()
+                            styleRow(model, L("Скругление"), \.boxCornerRadius) {
+                                ValueField(value: model.pixels(\.boxCornerRadius, \.boxCornerRadius), range: 0...200)
+                            }
+                        }
+                        .card()
+                        .transition(.reveal(reduceMotion: reduceMotion))
+                    }
+                }
+            }
+            .equatable()
         }
     }
 
@@ -650,7 +862,8 @@ private struct EffectsTab: View {
 }
 
 private struct HighlightSection: View {
-    @EnvironmentObject var model: AppModel
+    let model: AppModel
+    let style: SubtitlePreset
 
     var body: some View {
         let current = model.effectiveStyle.highlightColor

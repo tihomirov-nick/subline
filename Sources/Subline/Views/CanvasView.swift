@@ -10,9 +10,10 @@ struct CanvasArea: View {
     @Environment(\.fileIsDragged) private var fileIsDragged
 
     var body: some View {
+        let _ = RenderCount.hit("CanvasArea")
         ZStack(alignment: .top) {
             VStack(spacing: 10) {
-                SubtitleCanvas(player: player)
+                SubtitleCanvas(player: player, playheadCue: model.playheadCue, overlay: model.previewOverlay)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 Group {
                     if model.hasMedia {
@@ -32,7 +33,7 @@ struct CanvasArea: View {
                     .padding(.top, 28)
                     .transition(.reveal(reduceMotion: reduceMotion))
             }
-            StatusHUD(player: player)
+            StatusHUD(player: player, playheadCue: model.playheadCue)
                 .padding(.top, Metrics.inset + 8)
                 .padding(.horizontal, Metrics.inset)
         }
@@ -65,6 +66,10 @@ private struct AspectBar: View {
 struct SubtitleCanvas: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject var player: PlayerController
+    /// The subtitle shown is the one under the playhead.
+    @ObservedObject var playheadCue: PlayheadCue
+    /// Its image, drawn off the main thread.
+    @ObservedObject var overlay: PreviewOverlay
     @Environment(\.displayScale) private var displayScale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -85,19 +90,23 @@ struct SubtitleCanvas: View {
     @State private var cursorPushed = false
 
     var body: some View {
+        let _ = RenderCount.hit("SubtitleCanvas")
         GeometryReader { geometry in
             let canvas = model.canvasSize
             let fitted = Self.fit(canvas, in: geometry.size)
             let scale = canvas.width > 0 ? fitted.width / canvas.width : 1
             ZStack {
                 picture
-                if let overlay = model.overlayImage(pixelWidth: fitted.width * displayScale) {
-                    Image(decorative: overlay, scale: displayScale)
-                        .resizable()
-                        .interpolation(.high)
-                        .frame(width: fitted.width, height: fitted.height)
-                        .offset(rubber)
-                        .allowsHitTesting(false)
+                if let cue = model.previewCue {
+                    let _ = overlay.request(cue, renderer: model.renderer, pixelWidth: fitted.width * displayScale)
+                    if let image = overlay.image(for: cue) {
+                        Image(decorative: image, scale: displayScale)
+                            .resizable()
+                            .interpolation(.high)
+                            .frame(width: fitted.width, height: fitted.height)
+                            .offset(rubber)
+                            .allowsHitTesting(false)
+                    }
                 }
                 if model.isSampleCue, drag == nil, let rect = model.previewBlockGeometry()?.rect {
                     SampleLabel()
@@ -452,9 +461,12 @@ private struct FirstSteps: View {
 struct StatusHUD: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject var player: PlayerController
+    /// The note about a subtitle too long for its lines is about the one under the playhead.
+    @ObservedObject var playheadCue: PlayheadCue
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        let _ = RenderCount.hit("StatusHUD")
         VStack(spacing: 8) {
             if let activity = model.activity {
                 ActivityPill(activity: activity)

@@ -43,7 +43,7 @@ struct SidebarView: View {
                     EmptyState()
                         .transition(.reveal(reduceMotion: reduceMotion))
                 } else {
-                    CueList()
+                    CueList(playheadCue: model.playheadCue, player: model.player)
                         .transition(.opacity)
                 }
             }
@@ -511,34 +511,184 @@ private struct GroupsBar: View {
 
 private struct CueList: View {
     @EnvironmentObject var model: AppModel
+    @ObservedObject var playheadCue: PlayheadCue
+    /// Playing or paused (the row under the playhead shows its tools only while the video stands).
+    @ObservedObject var player: PlayerController
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var scrolling = ScrollActivity()
 
     var body: some View {
+        let _ = RenderCount.hit("CueList")
+        let cues = model.cues
+        let lastIndex = cues.count - 1
+        let current = playheadCue.id
+        let playing = player.isPlaying
+        let selected = model.selectedCueIDs
+        let wordCueID = model.scope == .words ? model.wordSelection?.cueID : nil
+        let editing = model.editingCueID
+        let focus = model.textFocusRequest
+        let clock = model.clockFormat
+        let groups = model.groups
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 2) {
-                    ForEach(model.cues) { cue in
-                        CueRow(cue: cue,
-                               isCurrent: cue.id == model.currentCueID,
-                               isSelected: model.selectedCueIDs.contains(cue.id) || (model.scope == .words && model.wordSelection?.cueID == cue.id),
-                               group: model.group(cue.groupID))
+                    ForEach(Array(cues.enumerated()), id: \.element.id) { index, cue in
+                        CueRow(model: model, cue: cue, isFirst: index == 0, isLast: index == lastIndex,
+                               isCurrent: cue.id == current, isPlaying: cue.id == current && playing,
+                               isSelected: selected.contains(cue.id) || cue.id == wordCueID,
+                               isEditing: cue.id == editing,
+                               group: cue.groupID.flatMap { id in groups.first { $0.id == id } },
+                               groups: groups, fit: Self.rowFit(model.lineFit(for: cue)), clock: clock,
+                               focusRequested: cue.id == focus)
+                            .equatable()
                             .id(cue.id)
+                            .onAppear { scrolling.shown.insert(cue.id) }
+                            .onDisappear { scrolling.shown.remove(cue.id) }
                     }
                 }
                 .padding(.horizontal, 6)
                 .padding(.top, 4)
                 .padding(.bottom, Metrics.inset)
+                .background(ScrollActivityReader(activity: scrolling))
             }
             .softTopEdge()
-            .onChange(of: model.currentCueID) { id in
-                // Keep the subtitle under the playhead in view.
-                guard let id else { return }
-                proxy.scrollTo(id, anchor: .center)
+            .onChange(of: current) { id in
+                follow(id, proxy)
             }
-            .onChange(of: model.textFocusRequest) { id in
+            .onChange(of: focus) { id in
                 // Tab: the next subtitle comes into view, its text takes the typing.
                 guard let id else { return }
                 proxy.scrollTo(id, anchor: .center)
             }
+        }
+    }
+
+    /// What a row shows of how its text fits: the number of lines matters only when it is too many (the note under the
+    /// text says it). A size slider changes the lines of many subtitles at every step; rows that still fit stay still.
+    static func rowFit(_ fit: LineFit) -> LineFit {
+        fit.overflows ? fit : LineFit(lines: 0, maxLines: fit.maxLines)
+    }
+
+    /// Keeps the subtitle under the playhead in view, smoothly and only when it has left the view: then it comes to
+    /// the middle and the next ones play without moving the list. Not while the person scrolls the list themselves (and
+    /// a moment after). While the playhead jumps quickly (scrubbing, stepping) the list waits until it settles, so it
+    /// does not jump along with every step.
+    private func follow(_ id: UUID?, _ proxy: ScrollViewProxy) {
+        scrolling.pendingFollow?.cancel()
+        guard let id, !scrolling.personScrolledRecently else { return }
+        let now = CACurrentMediaTime()
+        let quick = now - scrolling.lastFollowRequest < ScrollActivity.settle
+        scrolling.lastFollowRequest = now
+        if quick {
+            let work = DispatchWorkItem { [scrolling] in
+                MainActor.assumeIsolated {
+                    guard !scrolling.personScrolledRecently, model.currentCueID == id else { return }
+                    reveal(id, proxy, animated: true)
+                }
+            }
+            scrolling.pendingFollow = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + ScrollActivity.settle, execute: work)
+        } else {
+            reveal(id, proxy, animated: true)
+        }
+    }
+
+    private func reveal(_ id: UUID, _ proxy: ScrollViewProxy, animated: Bool) {
+        guard !scrolling.isComfortablyShown(id, in: model.cues) else { return }
+        if animated && !reduceMotion {
+            withAnimation(.easeInOut(duration: 0.35)) { proxy.scrollTo(id, anchor: .center) }
+        } else {
+            proxy.scrollTo(id, anchor: .center)
+        }
+    }
+}
+
+/// What following the playhead needs to know about the list: when the person last scrolled it (wheel, trackpad,
+/// scroller), and which rows are on screen.
+@MainActor
+final class ScrollActivity {
+    /// Following waits this long after the person's own scrolling.
+    static let pause: CFTimeInterval = 2.5
+    /// Jumps of the playhead closer than this are one move (scrubbing, stepping).
+    static let settle: CFTimeInterval = 0.3
+    var lastPersonScroll: CFTimeInterval = -.infinity
+    var lastFollowRequest: CFTimeInterval = -.infinity
+    var pendingFollow: DispatchWorkItem?
+    /// Rows the list has made (those on screen and next to it).
+    var shown = Set<UUID>()
+
+    var personScrolledRecently: Bool { CACurrentMediaTime() - lastPersonScroll < Self.pause }
+
+    /// The row is on screen with at least one row after it and before it (unless it is the first or the last).
+    func isComfortablyShown(_ id: UUID, in cues: [Cue]) -> Bool {
+        guard shown.contains(id), let index = cues.firstIndex(where: { $0.id == id }) else { return false }
+        var first = Int.max
+        var last = Int.min
+        for (position, cue) in cues.enumerated() where shown.contains(cue.id) {
+            first = min(first, position)
+            last = max(last, position)
+        }
+        let top = first == 0 ? 0 : first + 1
+        let bottom = last == cues.count - 1 ? last : last - 1
+        return index >= top && index <= bottom
+    }
+}
+
+/// Finds the scroll view around it and notes the scrolling the person does. Scrolling to a row from the code posts
+/// none of these, so following the playhead does not count as the person's scroll.
+private struct ScrollActivityReader: NSViewRepresentable {
+    let activity: ScrollActivity
+
+    func makeNSView(context: Context) -> ReaderView {
+        ReaderView(activity: activity)
+    }
+
+    func updateNSView(_ nsView: ReaderView, context: Context) {}
+
+    final class ReaderView: NSView {
+        let activity: ScrollActivity
+        private var observers: [NSObjectProtocol] = []
+        private var wheelMonitor: Any?
+
+        init(activity: ScrollActivity) {
+            self.activity = activity
+            super.init(frame: .zero)
+        }
+
+        required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            stopWatching()
+            guard window != nil, let scrollView = enclosingScrollView else { return }
+            for name in [NSScrollView.willStartLiveScrollNotification, NSScrollView.didLiveScrollNotification] {
+                observers.append(NotificationCenter.default.addObserver(forName: name, object: scrollView, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.activity.lastPersonScroll = CACurrentMediaTime() }
+                })
+            }
+            // A plain mouse wheel scrolls without live scroll notifications.
+            wheelMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self, weak scrollView] event in
+                MainActor.assumeIsolated {
+                    guard let self, let scrollView, event.window === scrollView.window,
+                          scrollView.bounds.contains(scrollView.convert(event.locationInWindow, from: nil)) else { return }
+                    self.activity.lastPersonScroll = CACurrentMediaTime()
+                }
+                return event
+            }
+        }
+
+        private func stopWatching() {
+            observers.forEach(NotificationCenter.default.removeObserver)
+            observers.removeAll()
+            if let wheelMonitor { NSEvent.removeMonitor(wheelMonitor) }
+            wheelMonitor = nil
+        }
+
+        override func removeFromSuperview() {
+            stopWatching()
+            super.removeFromSuperview()
         }
     }
 }
@@ -546,19 +696,42 @@ private struct CueList: View {
 /// One subtitle: timing on top, its text below, typed right in place. The subtitle under the playhead has a white bar
 /// and a brighter start time; selected subtitles are lighter. While its text is typed in, the row has a white outline
 /// and a "Done" button with the Esc key under the text.
-struct CueRow: View {
-    @EnvironmentObject var model: AppModel
+///
+/// The row draws only from the values it is given (`==` compares them) and does not watch the model, which it keeps
+/// for its actions: a letter typed in another subtitle or a style change elsewhere leaves it alone, and the playhead
+/// moving to the next subtitle redraws two rows, the one it left and the one it reached.
+struct CueRow: View, Equatable {
+    let model: AppModel
     let cue: Cue
+    let isFirst: Bool
+    let isLast: Bool
     let isCurrent: Bool
+    /// The video plays through this row (only the row under the playhead gets true).
+    let isPlaying: Bool
     let isSelected: Bool
+    let isEditing: Bool
     let group: SubtitleGroup?
+    /// For the "Добавить в группу" menu.
+    let groups: [SubtitleGroup]
+    let fit: LineFit
+    let clock: ClockFormat
+    let focusRequested: Bool
     @State private var hovering = false
 
+    static func == (lhs: CueRow, rhs: CueRow) -> Bool {
+        lhs.cue == rhs.cue && lhs.isFirst == rhs.isFirst && lhs.isLast == rhs.isLast && lhs.isCurrent == rhs.isCurrent
+            && lhs.isPlaying == rhs.isPlaying && lhs.isSelected == rhs.isSelected && lhs.isEditing == rhs.isEditing && lhs.group == rhs.group
+            && lhs.groups == rhs.groups && lhs.fit == rhs.fit && lhs.clock == rhs.clock
+            && lhs.focusRequested == rhs.focusRequested && lhs.model === rhs.model
+    }
+
     var body: some View {
-        let editing = model.editingCueID == cue.id
-        let fit = model.lineFit(for: cue)
-        let active = hovering || isCurrent || isSelected || editing
-        let clock = model.clockFormat
+        let _ = RenderCount.hit("CueRow")
+        let editing = isEditing
+        let active = hovering || isSelected || editing || (isCurrent && !isPlaying)
+        let words = CueText.words(cue.text)
+        let canMoveFirst = !isFirst && !words.isEmpty
+        let canMoveLast = !isLast && !words.isEmpty
         HStack(alignment: .top, spacing: 8) {
             // The group is said in words too (VoiceOver, the tooltip): the color alone does not carry it.
             Capsule()
@@ -585,48 +758,14 @@ struct CueRow: View {
                             .accessibilityLabel(L("У субтитра свой стиль"))
                     }
                     Spacer(minLength: 0)
-                    HStack(spacing: 0) {
-                        // Moving words shows on the row being worked with; the ⋯ menu is always there, quietly.
-                        Group {
-                            IconButton(symbol: "arrow.up.to.line", help: L("Первое слово в предыдущий субтитр (⌥⌘↑)"),
-                                       size: 20, filled: false) {
-                                model.moveFirstWordToPrevious(cue.id)
-                            }
-                            .disabled(!model.canMoveFirstWordToPrevious(cue.id))
-                            IconButton(symbol: "arrow.down.to.line", help: L("Последнее слово в следующий субтитр (⌥⌘↓)"),
-                                       size: 20, filled: false) {
-                                model.moveLastWordToNext(cue.id)
-                            }
-                            .disabled(!model.canMoveLastWordToNext(cue.id))
-                        }
-                        .opacity(active ? 1 : 0)
-                        .allowsHitTesting(active)
-                        .accessibilityHidden(!active)
-                        MenuIconButton(help: L("Действия с субтитром"), size: 20, filled: false) { entries }
-                            .opacity(active ? 1 : 0.45)
-                    }
+                    RowTools(active: active, canMoveFirst: canMoveFirst, canMoveLast: canMoveLast,
+                             moveFirst: { [model, id = cue.id] in model.moveFirstWordToPrevious(id) },
+                             moveLast: { [model, id = cue.id] in model.moveLastWordToNext(id) },
+                             entries: { [model, id = cue.id] in CueRow.entries(model: model, id: id) })
+                        .equatable()
                 }
-                CueTextEditor(cueID: cue.id, text: cue.text, allowsLineBreaks: fit.maxLines > 1,
-                              menuEntries: { textMenuEntries },
-                              onBegin: { model.beginTextEditing(cue) },
-                              onChange: { model.editCueText(cue.id, $0) },
-                              onCaret: { offset in
-                                  model.textCaret = TextCaret(cueID: cue.id, offset: offset, text: model.cues.first { $0.id == cue.id }?.text ?? cue.text,
-                                                              time: Date())
-                              },
-                              onEnd: { model.endTextEditing(cue.id) },
-                              onTab: { forward in model.editText(after: cue.id, forward: forward) },
-                              focusRequested: model.textFocusRequest == cue.id,
-                              onFocusTaken: { if model.textFocusRequest == cue.id { model.textFocusRequest = nil } })
-                    .overlay(alignment: .topLeading) {
-                        if cue.text.isEmpty {
-                            Text(L("Текст субтитра"))
-                                .font(.system(size: 13.5))
-                                .foregroundStyle(Palette.placeholder)
-                                .allowsHitTesting(false)
-                                .accessibilityHidden(true)
-                        }
-                    }
+                CueTextCell(model: model, cue: cue, allowsLineBreaks: fit.maxLines > 1, isEditing: isEditing,
+                            focusRequested: focusRequested, menuEntries: { textMenuEntries })
                 if fit.overflows {
                     OverflowNote(fit: fit) { model.splitToFit(cue.id) }
                 }
@@ -681,59 +820,199 @@ struct CueRow: View {
 
     /// Moving words and cutting: in the ⋯ menu, the right-click menu of the row and the menu of the text. A cut goes
     /// at the text caret while the text is typed in, else at the playhead inside the subtitle, else where both halves
-    /// fit best.
-    private func wordEntries(atCaret: Bool) -> [MenuEntry] {
-        [
-            .item(L("Перенести первое слово в предыдущий субтитр"), enabled: model.canMoveFirstWordToPrevious(cue.id)) {
-                model.moveFirstWordToPrevious(cue.id)
+    /// fit best. Built from the model as it is when the menu opens: a row left alone by `==` may hold older values.
+    static func wordEntries(model: AppModel, id: UUID, atCaret: Bool) -> [MenuEntry] {
+        guard let index = model.cues.firstIndex(where: { $0.id == id }) else { return [] }
+        let words = CueText.words(model.cues[index].text)
+        let isFirst = index == 0
+        let isLast = index == model.cues.count - 1
+        return [
+            .item(L("Перенести первое слово в предыдущий субтитр"), enabled: !isFirst && !words.isEmpty) {
+                model.moveFirstWordToPrevious(id)
             },
-            .item(L("Перенести последнее слово в следующий субтитр"), enabled: model.canMoveLastWordToNext(cue.id)) {
-                model.moveLastWordToNext(cue.id)
+            .item(L("Перенести последнее слово в следующий субтитр"), enabled: !isLast && !words.isEmpty) {
+                model.moveLastWordToNext(id)
             },
-            .item(atCaret ? L("Разделить по текстовому курсору") : L("Разделить субтитр"), enabled: model.canSplit(cue.id)) {
-                model.splitCue(cue.id)
+            .item(atCaret ? L("Разделить по текстовому курсору") : L("Разделить субтитр"), enabled: words.count > 1) {
+                model.splitCue(id)
             },
-            .item(L("Объединить со следующим"), enabled: model.canMergeWithNext(cue.id)) { model.mergeWithNext(cue.id) },
+            .item(L("Объединить со следующим"), enabled: !isLast) { model.mergeWithNext(id) },
         ]
     }
 
     /// The menu of the text is built on the right click, while typing goes on.
     private var textMenuEntries: [MenuEntry] {
-        wordEntries(atCaret: model.editingCueID == cue.id)
+        Self.wordEntries(model: model, id: cue.id, atCaret: model.editingCueID == cue.id)
     }
 
     private var entries: [MenuEntry] {
+        Self.entries(model: model, id: cue.id)
+    }
+
+    /// The ⋯ menu and the right-click menu of a row.
+    static func entries(model: AppModel, id: UUID) -> [MenuEntry] {
+        guard let cue = model.cues.first(where: { $0.id == id }) else { return [] }
         var items: [MenuEntry] = [.item(L("Перейти к началу")) { model.select(cue, keepPlaying: true) }]
-        items += wordEntries(atCaret: false)
+        items += wordEntries(model: model, id: id, atCaret: false)
         items += [
-            .item(L("Добавить субтитр после")) { model.insertCue(after: cue.id) },
+            .item(L("Добавить субтитр после")) { model.insertCue(after: id) },
             .separator,
             .item(L("Новая группа из выбранных")) {
-                if !model.selectedCueIDs.contains(cue.id) { model.clickRow(cue, modifiers: []) }
+                if !model.selectedCueIDs.contains(id) { model.clickRow(cue, modifiers: []) }
                 model.createGroup()
             },
         ]
         if !model.groups.isEmpty {
             items.append(.submenu(L("Добавить в группу"), model.groups.map { group in
                 .item(group.name) {
-                    if !model.selectedCueIDs.contains(cue.id) { model.clickRow(cue, modifiers: []) }
+                    if !model.selectedCueIDs.contains(id) { model.clickRow(cue, modifiers: []) }
                     model.addToGroup(group.id)
                 }
             }))
         }
         if cue.groupID != nil {
-            items.append(.item(L("Убрать из группы")) { model.removeFromGroup([cue.id]) })
+            items.append(.item(L("Убрать из группы")) { model.removeFromGroup([id]) })
         }
         if cue.hasCustomStyle {
             items.append(.item(L("Сбросить стиль субтитра")) {
                 model.clickRow(cue, modifiers: [])
                 model.scope = .cues
                 model.resetScopeStyle()
-                model.modifyWordStylesReset(cue.id)
+                model.modifyWordStylesReset(id)
             })
         }
-        items += [.separator, .item(L("Удалить")) { model.deleteCue(cue.id) }]
+        items += [.separator, .item(L("Удалить")) { model.deleteCue(id) }]
         return items
+    }
+}
+
+/// The buttons at the end of a row's times. Moving words shows on the row being worked with (under the pointer, selected,
+/// typed in, or under the playhead while the video stands), and those buttons are made only then: in every row of a
+/// long list they cost more than the rest of it. The ⋯ menu is always there, quietly. Redrawn only when what it shows
+/// changes, not on every letter typed in the row.
+private struct RowTools: View, Equatable {
+    let active: Bool
+    let canMoveFirst: Bool
+    let canMoveLast: Bool
+    let moveFirst: () -> Void
+    let moveLast: () -> Void
+    let entries: () -> [MenuEntry]
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.active == rhs.active && lhs.canMoveFirst == rhs.canMoveFirst && lhs.canMoveLast == rhs.canMoveLast
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            if active {
+                IconButton(symbol: "arrow.up.to.line", help: L("Первое слово в предыдущий субтитр (⌥⌘↑)"),
+                           size: 20, filled: false, action: moveFirst)
+                    .disabled(!canMoveFirst)
+                IconButton(symbol: "arrow.down.to.line", help: L("Последнее слово в следующий субтитр (⌥⌘↓)"),
+                           size: 20, filled: false, action: moveLast)
+                    .disabled(!canMoveLast)
+            } else {
+                Color.clear
+                    .frame(width: 48, height: 24)
+                    .accessibilityHidden(true)
+            }
+            MenuIconButton(help: L("Действия с субтитром"), size: 20, filled: false, entries: entries)
+                .opacity(active ? 1 : 0.45)
+        }
+    }
+}
+
+/// The text of a subtitle in its row. Plain text until the person clicks into it (or Tab brings typing here); then
+/// the editor (an AppKit text view) takes its place with the caret where the click was. A text view in every row made
+/// each row take milliseconds to appear while the list scrolled. The plain text is sized the way the editor lays the
+/// text out, so the row keeps its height when one replaces the other. A click with ⇧ or ⌘ selects the row instead.
+private struct CueTextCell: View {
+    let model: AppModel
+    let cue: Cue
+    let allowsLineBreaks: Bool
+    let isEditing: Bool
+    let focusRequested: Bool
+    let menuEntries: () -> [MenuEntry]
+    @State private var editorShown = false
+    @State private var caret: Int?
+    @State private var width = TextWidth()
+
+    var body: some View {
+        Group {
+            if editorShown || isEditing || focusRequested {
+                CueTextEditor(cueID: cue.id, text: cue.text, allowsLineBreaks: allowsLineBreaks,
+                              menuEntries: menuEntries,
+                              onBegin: { model.beginTextEditing(cue) },
+                              onChange: { model.editCueText(cue.id, $0) },
+                              onCaret: { offset in
+                                  model.textCaret = TextCaret(cueID: cue.id, offset: offset, text: model.cues.first { $0.id == cue.id }?.text ?? cue.text,
+                                                              time: Date())
+                              },
+                              onEnd: {
+                                  model.endTextEditing(cue.id)
+                                  editorShown = false
+                                  caret = nil
+                              },
+                              onTab: { forward in model.editText(after: cue.id, forward: forward) },
+                              focusRequested: focusRequested || (editorShown && !isEditing),
+                              caretOnFocus: caret,
+                              onFocusTaken: { if model.textFocusRequest == cue.id { model.textFocusRequest = nil } })
+            } else {
+                EditorSizedText(text: cue.text, width: width) {
+                    Text(cue.text)
+                        .font(Font(CueTextEditor.font as CTFont))
+                        .foregroundStyle(Color.white)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .contentShape(Rectangle())
+                .onTapGesture(coordinateSpace: .local) { location in
+                    if !NSEvent.modifierFlags.intersection([.shift, .command]).isEmpty {
+                        model.clickRow(cue, modifiers: NSEvent.modifierFlags)
+                        return
+                    }
+                    caret = CueTextEditor.characterIndex(in: cue.text, width: width.value, at: location)
+                    editorShown = true
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(L("Текст субтитра"))
+                .accessibilityValue(cue.text)
+                .accessibilityAction { editorShown = true }
+            }
+        }
+        .overlay(alignment: .topLeading) {
+            if cue.text.isEmpty {
+                Text(L("Текст субтитра"))
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(Palette.placeholder)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+}
+
+/// The width the text was last laid out at (for finding the character under a click).
+@MainActor
+private final class TextWidth {
+    var value: CGFloat = 0
+}
+
+/// Gives the text the height the editor would lay it out at, and notes the width.
+private struct EditorSizedText: Layout {
+    let text: String
+    let width: TextWidth
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width.flatMap { $0.isFinite && $0 > 0 ? $0 : nil } ?? 120
+        // SwiftUI lays out on the main thread.
+        return CGSize(width: width, height: MainActor.assumeIsolated { CueTextEditor.height(of: text, width: width) })
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        MainActor.assumeIsolated { width.value = bounds.width }
+        for subview in subviews {
+            subview.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(width: bounds.width, height: bounds.height))
+        }
     }
 }
 

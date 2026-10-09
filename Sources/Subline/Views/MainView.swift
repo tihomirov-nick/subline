@@ -119,13 +119,51 @@ struct MainView: View {
 }
 
 /// The strip at the top, in the titlebar: the window's own buttons, the file, opening and saving. Its empty parts
-/// move the window.
+/// move the window. It watches the model and passes what it shows on as a value: the strip itself redraws only when
+/// that changes, not on every letter typed or style value tried.
 private struct TopBar: View {
     @EnvironmentObject var model: AppModel
     let chrome: WindowChrome
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        let _ = RenderCount.hit("TopBar")
+        TopBarContent(model: model, chrome: chrome, inputs: .init(
+            title: model.mediaURL?.lastPathComponent ?? "Subline",
+            summary: model.media?.summary,
+            showsSaved: !model.cues.isEmpty,
+            savedFlash: model.savedFlash,
+            isExporting: model.isExporting,
+            // Always takes the click: when export cannot run, the click says why (the tooltip says it too).
+            exportBlocker: model.exportBlocker(),
+            exportsSubtitlesOnly: model.hasMedia && !model.hasVideo,
+            showInspector: model.showInspector))
+        .equatable()
+    }
+}
+
+private struct TopBarContent: View, Equatable {
+    struct Inputs: Equatable {
+        let title: String
+        let summary: String?
+        let showsSaved: Bool
+        let savedFlash: Int
+        let isExporting: Bool
+        let exportBlocker: String?
+        let exportsSubtitlesOnly: Bool
+        let showInspector: Bool
+    }
+
+    let model: AppModel
+    let chrome: WindowChrome
+    let inputs: Inputs
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.model === rhs.model && lhs.chrome == rhs.chrome && lhs.inputs == rhs.inputs
+    }
+
+    var body: some View {
+        let _ = RenderCount.hit("TopBarContent")
         HStack(spacing: 8) {
             title
             Spacer(minLength: 12)
@@ -134,22 +172,20 @@ private struct TopBar: View {
             }
             .appButton(.secondary)
             .help(L("Открыть видео (⌘O)"))
-            .disabled(model.isExporting)
-            // Always takes the click: when export cannot run, the click says why (the tooltip says it too).
-            let blocker = model.exportBlocker()
+            .disabled(inputs.isExporting)
             SplitButton(title: L("Экспорт"),
-                        help: blocker ?? (model.hasMedia && !model.hasVideo ? L("Экспортировать субтитры в SRT (⌘E)")
-                                                                           : L("Экспортировать видео с субтитрами (⌘E)")),
+                        help: inputs.exportBlocker ?? (inputs.exportsSubtitlesOnly ? L("Экспортировать субтитры в SRT (⌘E)")
+                                                                                   : L("Экспортировать видео с субтитрами (⌘E)")),
                         menuHelp: L("Другие форматы"),
-                        dimmed: blocker != nil,
-                        action: { model.export(model.defaultExportFormat) },
-                        entries: {
+                        dimmed: inputs.exportBlocker != nil,
+                        action: { [model] in model.export(model.defaultExportFormat) },
+                        entries: { [model] in
                             ExportFormat.allCases.map { format in
                                 .item(format.title) { model.export(format) }
                             }
                         })
-            IconButton(symbol: "sidebar.right", help: model.showInspector ? L("Скрыть стиль (⌥⌘I)") : L("Показать стиль (⌥⌘I)"),
-                       size: 28, filled: model.showInspector) {
+            IconButton(symbol: "sidebar.right", help: inputs.showInspector ? L("Скрыть стиль (⌥⌘I)") : L("Показать стиль (⌥⌘I)"),
+                       size: 28, filled: inputs.showInspector) {
                 withAnimation(Motion.animation(Motion.island, reduceMotion: reduceMotion)) {
                     model.showInspector.toggle()
                 }
@@ -164,32 +200,86 @@ private struct TopBar: View {
     /// The file name, its summary and the saved mark. In a narrow window the summary gives way first, then the name
     /// shortens in the middle; the summary never shrinks to a letter.
     private var title: some View {
-        ViewThatFits(in: .horizontal) {
-            titleRow(summary: true)
-            titleRow(summary: false)
-        }
-    }
-
-    private func titleRow(summary showsSummary: Bool) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(model.mediaURL?.lastPathComponent ?? "Subline")
+        TitleLayout(spacing: 8) {
+            Text(inputs.title)
                 .font(.system(size: 13, weight: .semibold))
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .layoutPriority(1)
                 .allowsHitTesting(false)
-            if showsSummary, let summary = model.media?.summary {
+                .layoutValue(key: TitlePart.self, value: .name)
+            if let summary = inputs.summary {
                 Text(summary)
                     .font(.system(size: 11.5))
                     .foregroundStyle(Palette.tertiary)
                     .lineLimit(1)
-                    .fixedSize()
+                    .frame(minWidth: 0, alignment: .leading)
+                    .clipped()
                     .allowsHitTesting(false)
+                    .layoutValue(key: TitlePart.self, value: .summary)
             }
-            if !model.cues.isEmpty {
-                SavedMark(flash: model.savedFlash)
+            if inputs.showsSaved {
+                SavedMark(flash: inputs.savedFlash)
+                    .layoutValue(key: TitlePart.self, value: .mark)
             }
         }
+    }
+}
+
+/// Which part of the title a view is.
+private enum TitlePart: LayoutValueKey {
+    case name, summary, mark
+    static let defaultValue = TitlePart.name
+}
+
+/// Lays out the title in one line on the first text baseline: everything at its own width when it fits; otherwise
+/// without the summary (given no width), and the name takes what remains. Unlike ViewThatFits it measures each part
+/// once instead of building and measuring two versions of the title on every layout pass of the window.
+private struct TitleLayout: Layout {
+    var spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let parts = arrange(width: proposal.width, subviews: subviews)
+        return CGSize(width: parts.width, height: parts.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let parts = arrange(width: bounds.width, subviews: subviews)
+        var x = bounds.minX
+        for (index, subview) in subviews.enumerated() {
+            let width = parts.widths[index]
+            let dimensions = subview.dimensions(in: ProposedViewSize(width: width, height: nil))
+            let y = bounds.minY + parts.baseline - dimensions[VerticalAlignment.firstTextBaseline]
+            subview.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: ProposedViewSize(width: width, height: nil))
+            if width > 0 { x += width + spacing }
+        }
+    }
+
+    /// The width of each part, the line's width and height, and where the baseline is.
+    private func arrange(width available: CGFloat?, subviews: Subviews) -> (widths: [CGFloat], width: CGFloat, height: CGFloat, baseline: CGFloat) {
+        let ideal = subviews.map { $0.sizeThatFits(.unspecified).width }
+        let kinds = subviews.map { $0[TitlePart.self] }
+        func total(_ widths: [CGFloat]) -> CGFloat {
+            let shown = widths.filter { $0 > 0 }
+            return shown.reduce(0, +) + spacing * CGFloat(max(0, shown.count - 1))
+        }
+        var widths = ideal
+        if let available, total(widths) > available {
+            // The summary goes first, then the name shortens.
+            for index in kinds.indices where kinds[index] == .summary { widths[index] = 0 }
+            if let name = kinds.firstIndex(of: .name) {
+                let others = widths.indices.filter { $0 != name && widths[$0] > 0 }
+                let taken = others.reduce(0) { $0 + widths[$1] } + spacing * CGFloat(others.count)
+                widths[name] = max(0, min(ideal[name], available - taken))
+            }
+        }
+        var ascent: CGFloat = 0
+        var descent: CGFloat = 0
+        for (index, subview) in subviews.enumerated() where widths[index] > 0 {
+            let dimensions = subview.dimensions(in: ProposedViewSize(width: widths[index], height: nil))
+            ascent = max(ascent, dimensions[VerticalAlignment.firstTextBaseline])
+            descent = max(descent, dimensions.height - dimensions[VerticalAlignment.firstTextBaseline])
+        }
+        return (widths, total(widths), ascent + descent, ascent)
     }
 }
 

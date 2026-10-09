@@ -21,6 +21,8 @@ struct CueTextEditor: NSViewRepresentable {
     var onTab: ((Bool) -> Void)?
     /// Typing should move here (Tab from the subtitle before); `onFocusTaken` is called once the text has the keyboard.
     var focusRequested = false
+    /// Where the caret goes when the text takes the keyboard (the place of a click); at the end when nil.
+    var caretOnFocus: Int?
     var onFocusTaken: () -> Void = {}
 
     static let font = NSFont.systemFont(ofSize: 13.5)
@@ -62,6 +64,7 @@ struct CueTextEditor: NSViewRepresentable {
     func updateNSView(_ view: CueTextView, context: Context) {
         context.coordinator.parent = self
         view.cueID = cueID
+        view.caretOnFocus = caretOnFocus
         if focusRequested { view.takeFocusWhenPossible() }
         guard view.string != text, !view.hasMarkedText() else { return }
         // The text changed outside (a word moved to a neighbour, undo): the caret stays as near as it can, and the undo
@@ -79,8 +82,37 @@ struct CueTextEditor: NSViewRepresentable {
         return CGSize(width: width, height: Self.height(of: nsView.string, width: width))
     }
 
-    /// The height of the text at this width (at least one line).
-    static func height(of text: String, width: CGFloat) -> CGFloat {
+    @MainActor private static var heights: [String: CGFloat] = [:]
+
+    /// The height of the text at this width (at least one line). Laying out the text takes a while and every layout
+    /// pass of the list asks again, so the answers are kept.
+    @MainActor static func height(of text: String, width: CGFloat) -> CGFloat {
+        let key = "\(width)|\(text)"
+        if let height = heights[key] { return height }
+        if heights.count > 4000 { heights.removeAll(keepingCapacity: true) }
+        let height = measureHeight(of: text, width: width)
+        heights[key] = height
+        return height
+    }
+
+    /// The character under a point of the text laid out at this width: where a click puts the caret.
+    @MainActor static func characterIndex(in text: String, width: CGFloat, at point: CGPoint) -> Int {
+        let length = (text as NSString).length
+        guard length > 0 else { return 0 }
+        let storage = NSTextStorage(string: text, attributes: [.font: font])
+        let container = NSTextContainer(size: NSSize(width: max(1, width), height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        let layout = NSLayoutManager()
+        layout.addTextContainer(container)
+        storage.addLayoutManager(layout)
+        layout.ensureLayout(for: container)
+        var fraction: CGFloat = 0
+        let glyph = layout.glyphIndex(for: point, in: container, fractionOfDistanceThroughGlyph: &fraction)
+        let index = layout.characterIndexForGlyph(at: glyph) + (fraction > 0.5 ? 1 : 0)
+        return min(max(0, index), length)
+    }
+
+    private static func measureHeight(of text: String, width: CGFloat) -> CGFloat {
         let storage = NSTextStorage(string: text.isEmpty ? " " : text, attributes: [.font: font])
         let container = NSTextContainer(size: NSSize(width: max(1, width), height: .greatestFiniteMagnitude))
         container.lineFragmentPadding = 0
@@ -189,6 +221,8 @@ final class CueTextView: NSTextView {
     private(set) var isEnding = false
     /// Typing moves here as soon as the view is in a window (a row of the list appears while it scrolls into view).
     private var wantsFocus = false
+    /// Where the caret goes when the view takes the keyboard; at the end when nil.
+    var caretOnFocus: Int?
 
     func takeFocusWhenPossible() {
         wantsFocus = true
@@ -199,8 +233,9 @@ final class CueTextView: NSTextView {
         guard wantsFocus, let window else { return }
         wantsFocus = false
         if window.firstResponder !== self, window.makeFirstResponder(self) {
-            // The caret at the end, ready to go on typing.
-            setSelectedRange(NSRange(location: (string as NSString).length, length: 0))
+            // The caret where the click was, or at the end, ready to go on typing.
+            let length = (string as NSString).length
+            setSelectedRange(NSRange(location: min(caretOnFocus ?? length, length), length: 0))
         }
         coordinator?.parent.onFocusTaken()
     }

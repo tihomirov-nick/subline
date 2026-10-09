@@ -83,100 +83,7 @@ struct SublineApp: App {
                 }
                 .keyboardShortcut("i", modifiers: [.command, .option])
             }
-            // Space, the arrows and ⌫ are shortcuts of these items, but the keys are handled by KeyboardController: in
-            // the player it runs the command, in text and on focused controls the key goes to them.
-            CommandMenu(L("Воспроизведение")) {
-                Button(model.player.isPlaying ? L("Пауза") : L("Воспроизвести")) { model.player.togglePlay() }
-                    .keyboardShortcut(.space, modifiers: [])
-                    .disabled(!model.player.isReady)
-                Divider()
-                Button(L("Кадр вперёд")) { model.player.step(frames: 1) }
-                    .keyboardShortcut(.rightArrow, modifiers: [])
-                    .disabled(!model.hasMedia)
-                Button(L("Кадр назад")) { model.player.step(frames: -1) }
-                    .keyboardShortcut(.leftArrow, modifiers: [])
-                    .disabled(!model.hasMedia)
-                Button(L("Секунда вперёд")) { model.player.seek(to: model.player.currentTime + 1) }
-                    .keyboardShortcut(.rightArrow, modifiers: .shift)
-                    .disabled(!model.hasMedia)
-                Button(L("Секунда назад")) { model.player.seek(to: model.player.currentTime - 1) }
-                    .keyboardShortcut(.leftArrow, modifiers: .shift)
-                    .disabled(!model.hasMedia)
-                Divider()
-                Button(L("Следующий субтитр")) { model.selectAdjacentCue(1) }
-                    .keyboardShortcut(.downArrow, modifiers: [])
-                    .disabled(model.cues.isEmpty)
-                Button(L("Предыдущий субтитр")) { model.selectAdjacentCue(-1) }
-                    .keyboardShortcut(.upArrow, modifiers: [])
-                    .disabled(model.cues.isEmpty)
-            }
-            CommandMenu(L("Стиль")) {
-                Button(L("Скопировать стиль")) { model.copyStyle() }
-                    .keyboardShortcut("c", modifiers: [.command, .option])
-                Button(L("Вставить стиль")) { model.pasteStyle() }
-                    .keyboardShortcut("v", modifiers: [.command, .option])
-                    .disabled(model.copiedStyle == nil)
-                Button(L("Сбросить стиль области")) { model.resetScopeStyle() }
-                    .disabled(!model.scopeHasOverrides)
-                Divider()
-                Button(L("Сгруппировать выбранные субтитры")) { model.createGroup() }
-                    .keyboardShortcut("g", modifiers: .command)
-                    .disabled(model.scopeCueIDs.isEmpty)
-                Button(L("Применять ко всем субтитрам")) { model.clearSelection() }
-                    .disabled(model.scope == .all)
-                Divider()
-                Button(L("Библиотека шрифтов…")) { model.showFontLibrary = true }
-                    .keyboardShortcut("t", modifiers: [.command, .shift])
-                Button(L("Добавить файлы шрифтов…")) { model.addFonts() }
-            }
-            CommandMenu(L("Субтитры")) {
-                Button(L("Распознать речь")) { model.requestTranscription() }
-                    .keyboardShortcut("r", modifiers: .command)
-                    .disabled(!model.canTranscribe)
-                Menu(L("Язык речи")) {
-                    ForEach(WhisperEngine.languages, id: \.code) { language in
-                        Toggle(language.name, isOn: Binding(get: { model.language == language.code },
-                                                            set: { if $0 { model.language = language.code } }))
-                    }
-                }
-                Button(L("Пересобрать по пресету")) { model.rebuildCues() }
-                    .disabled(model.transcript == nil || model.isBusy)
-                Divider()
-                // The subtitle being typed in, the selected one or the one under the playhead.
-                Button(L("Разделить субтитр")) { model.splitCurrentCue() }
-                    .keyboardShortcut("b", modifiers: .command)
-                    .disabled(!model.canSplit(model.targetCueID))
-                Button(L("Объединить со следующим")) {
-                    if let id = model.targetCueID { model.mergeWithNext(id) }
-                }
-                .keyboardShortcut("j", modifiers: .command)
-                .disabled(!model.canMergeWithNext(model.targetCueID))
-                Button(L("Перенести первое слово в предыдущий субтитр")) {
-                    if let id = model.targetCueID { model.moveFirstWordToPrevious(id) }
-                }
-                .keyboardShortcut(.upArrow, modifiers: [.command, .option])
-                .disabled(!model.canMoveFirstWordToPrevious(model.targetCueID))
-                Button(L("Перенести последнее слово в следующий субтитр")) {
-                    if let id = model.targetCueID { model.moveLastWordToNext(id) }
-                }
-                .keyboardShortcut(.downArrow, modifiers: [.command, .option])
-                .disabled(!model.canMoveLastWordToNext(model.targetCueID))
-                Button(L("Добавить субтитр после")) {
-                    if let id = model.targetCueID { model.insertCue(after: id) }
-                }
-                .keyboardShortcut("n", modifiers: [.command, .option])
-                .disabled(model.targetCueID == nil)
-                Divider()
-                Button(L("Выбрать все субтитры")) { model.selectAllCues() }
-                    .disabled(model.cues.isEmpty)
-                Button(model.deletableCueIDs.count > 1 ? L("Удалить выбранные субтитры") : L("Удалить субтитр")) {
-                    model.deleteCues(model.deletableCueIDs)
-                }
-                .keyboardShortcut(.delete, modifiers: [])
-                .disabled(model.deletableCueIDs.isEmpty || model.isBusy)
-                Divider()
-                Button(L("Модели распознавания…")) { model.showModelManager = true }
-            }
+            PlayheadCommands(model: model, player: model.player, playheadCue: model.playheadCue)
             CommandGroup(replacing: .help) {
                 Button(L("Справка Subline")) { model.showHelp = true }
                     .keyboardShortcut("?", modifiers: .command)
@@ -188,6 +95,112 @@ struct SublineApp: App {
                 .environmentObject(model.updater)
         }
         .windowResizability(.contentSize)
+    }
+}
+
+/// The menus whose items follow the playhead: the subtitle commands act on the subtitle under it when nothing is
+/// selected, and Play turns into Pause. They watch the player and the subtitle under the playhead themselves, since
+/// `AppModel` does not publish those (they change too often for everything that watches it).
+struct PlayheadCommands: Commands {
+    @ObservedObject var model: AppModel
+    @ObservedObject var player: PlayerController
+    @ObservedObject var playheadCue: PlayheadCue
+
+    var body: some Commands {
+        // Space, the arrows and ⌫ are shortcuts of these items, but the keys are handled by KeyboardController: in
+        // the player it runs the command, in text and on focused controls the key goes to them.
+        CommandMenu(L("Воспроизведение")) {
+            Button(model.player.isPlaying ? L("Пауза") : L("Воспроизвести")) { model.player.togglePlay() }
+                .keyboardShortcut(.space, modifiers: [])
+                .disabled(!model.player.isReady)
+            Divider()
+            Button(L("Кадр вперёд")) { model.player.step(frames: 1) }
+                .keyboardShortcut(.rightArrow, modifiers: [])
+                .disabled(!model.hasMedia)
+            Button(L("Кадр назад")) { model.player.step(frames: -1) }
+                .keyboardShortcut(.leftArrow, modifiers: [])
+                .disabled(!model.hasMedia)
+            Button(L("Секунда вперёд")) { model.player.seek(to: model.player.currentTime + 1) }
+                .keyboardShortcut(.rightArrow, modifiers: .shift)
+                .disabled(!model.hasMedia)
+            Button(L("Секунда назад")) { model.player.seek(to: model.player.currentTime - 1) }
+                .keyboardShortcut(.leftArrow, modifiers: .shift)
+                .disabled(!model.hasMedia)
+            Divider()
+            Button(L("Следующий субтитр")) { model.selectAdjacentCue(1) }
+                .keyboardShortcut(.downArrow, modifiers: [])
+                .disabled(model.cues.isEmpty)
+            Button(L("Предыдущий субтитр")) { model.selectAdjacentCue(-1) }
+                .keyboardShortcut(.upArrow, modifiers: [])
+                .disabled(model.cues.isEmpty)
+        }
+        CommandMenu(L("Стиль")) {
+            Button(L("Скопировать стиль")) { model.copyStyle() }
+                .keyboardShortcut("c", modifiers: [.command, .option])
+            Button(L("Вставить стиль")) { model.pasteStyle() }
+                .keyboardShortcut("v", modifiers: [.command, .option])
+                .disabled(model.copiedStyle == nil)
+            Button(L("Сбросить стиль области")) { model.resetScopeStyle() }
+                .disabled(!model.scopeHasOverrides)
+            Divider()
+            Button(L("Сгруппировать выбранные субтитры")) { model.createGroup() }
+                .keyboardShortcut("g", modifiers: .command)
+                .disabled(model.scopeCueIDs.isEmpty)
+            Button(L("Применять ко всем субтитрам")) { model.clearSelection() }
+                .disabled(model.scope == .all)
+            Divider()
+            Button(L("Библиотека шрифтов…")) { model.showFontLibrary = true }
+                .keyboardShortcut("t", modifiers: [.command, .shift])
+            Button(L("Добавить файлы шрифтов…")) { model.addFonts() }
+        }
+        CommandMenu(L("Субтитры")) {
+            Button(L("Распознать речь")) { model.requestTranscription() }
+                .keyboardShortcut("r", modifiers: .command)
+                .disabled(!model.canTranscribe)
+            Menu(L("Язык речи")) {
+                ForEach(WhisperEngine.languages, id: \.code) { language in
+                    Toggle(language.name, isOn: Binding(get: { model.language == language.code },
+                                                        set: { if $0 { model.language = language.code } }))
+                }
+            }
+            Button(L("Пересобрать по пресету")) { model.rebuildCues() }
+                .disabled(model.transcript == nil || model.isBusy)
+            Divider()
+            // The subtitle being typed in, the selected one or the one under the playhead.
+            Button(L("Разделить субтитр")) { model.splitCurrentCue() }
+                .keyboardShortcut("b", modifiers: .command)
+                .disabled(!model.canSplit(model.targetCueID))
+            Button(L("Объединить со следующим")) {
+                if let id = model.targetCueID { model.mergeWithNext(id) }
+            }
+            .keyboardShortcut("j", modifiers: .command)
+            .disabled(!model.canMergeWithNext(model.targetCueID))
+            Button(L("Перенести первое слово в предыдущий субтитр")) {
+                if let id = model.targetCueID { model.moveFirstWordToPrevious(id) }
+            }
+            .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+            .disabled(!model.canMoveFirstWordToPrevious(model.targetCueID))
+            Button(L("Перенести последнее слово в следующий субтитр")) {
+                if let id = model.targetCueID { model.moveLastWordToNext(id) }
+            }
+            .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+            .disabled(!model.canMoveLastWordToNext(model.targetCueID))
+            Button(L("Добавить субтитр после")) {
+                if let id = model.targetCueID { model.insertCue(after: id) }
+            }
+            .keyboardShortcut("n", modifiers: [.command, .option])
+            .disabled(model.targetCueID == nil)
+            Divider()
+            Button(L("Выбрать все субтитры")) { model.selectAllCues() }
+                .disabled(model.cues.isEmpty)
+            Button(model.deletableCueIDs.count > 1 ? L("Удалить выбранные субтитры") : L("Удалить субтитр")) {
+                model.deleteCues(model.deletableCueIDs)
+            }
+            .keyboardShortcut(.delete, modifiers: [])
+            .disabled(model.deletableCueIDs.isEmpty || model.isBusy)
+            Divider()
+            Button(L("Модели распознавания…")) { model.showModelManager = true }
+        }
     }
 }
 

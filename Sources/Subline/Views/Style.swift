@@ -484,11 +484,13 @@ private struct FocusRing: ViewModifier {
     func body(content: Content) -> some View {
         content
             .overlay {
-                shape
-                    .stroke(Color(nsColor: .keyboardFocusIndicatorColor), lineWidth: 2.5)
-                    .padding(-2.5)
-                    .opacity(isFocused ? 1 : 0)
-                    .allowsHitTesting(false)
+                // Made only while focused: every button of the window carries this modifier.
+                if isFocused {
+                    shape
+                        .stroke(Color(nsColor: .keyboardFocusIndicatorColor), lineWidth: 2.5)
+                        .padding(-2.5)
+                        .allowsHitTesting(false)
+                }
             }
             .onChange(of: isFocused) { focused in
                 KeyboardFocus.set(id, focused: focused, space: takesSpace, arrows: takesArrows)

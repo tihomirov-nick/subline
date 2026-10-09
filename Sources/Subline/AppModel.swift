@@ -84,6 +84,80 @@ final class CancelFlag: @unchecked Sendable {
     }
 }
 
+/// The subtitle image over the video, drawn off the main thread with the export renderer. Drawing the outline of the
+/// text takes milliseconds at screen size; on the main thread it held up every letter typed into the subtitle under the
+/// playhead, every step of a style slider and every jump of the playhead. The image shown stays until the next one is
+/// drawn (a few milliseconds later); requests made meanwhile are merged, only the latest is drawn next.
+@MainActor
+final class PreviewOverlay: ObservableObject {
+    /// The renderer is held, not just named: a new one may not reuse the address of an old one and pass for it.
+    struct Key: Equatable {
+        let renderer: CueRenderer
+        let cue: Cue
+        let pixelWidth: Int
+
+        static func == (lhs: Key, rhs: Key) -> Bool {
+            lhs.renderer === rhs.renderer && lhs.cue == rhs.cue && lhs.pixelWidth == rhs.pixelWidth
+        }
+    }
+
+    /// The image shown and what it shows (published by hand: see `request`).
+    private var current: (key: Key, image: CGImage?)?
+    private var wanted: Key?
+    private var drawing = false
+    private let queue = DispatchQueue(label: "Subline.PreviewOverlay", qos: .userInteractive)
+
+    /// Asks for `cue` drawn `pixelWidth` pixels wide. Called while the canvas draws, so it publishes nothing then: the
+    /// very first image is drawn right away and read by the caller; later ones arrive from the queue.
+    func request(_ cue: Cue, renderer: CueRenderer, pixelWidth: CGFloat) {
+        guard pixelWidth >= 1, renderer.canvas.width > 0 else { return }
+        let key = Key(renderer: renderer, cue: cue, pixelWidth: Int(pixelWidth.rounded()))
+        guard key != current?.key, key != wanted else { return }
+        if current == nil, !drawing {
+            current = (key, Self.draw(key))
+            return
+        }
+        wanted = key
+        drawNext()
+    }
+
+    /// The image when it shows `cue` at any size (a resized window keeps showing it until the sharp one is drawn).
+    func image(for cue: Cue) -> CGImage? {
+        guard let current, current.key.cue.id == cue.id else { return nil }
+        return current.image
+    }
+
+    private func drawNext() {
+        guard !drawing, let job = wanted else { return }
+        wanted = nil
+        drawing = true
+        queue.async { [weak self] in
+            let drawn = Self.draw(job)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.drawing = false
+                    self.objectWillChange.send()
+                    self.current = (job, drawn)
+                    self.drawNext()
+                }
+            }
+        }
+    }
+
+    nonisolated private static func draw(_ key: Key) -> CGImage? {
+        key.renderer.makeImage(key.cue, outputScale: CGFloat(key.pixelWidth) / key.renderer.canvas.width, forScreen: true)
+    }
+}
+
+/// The subtitle under the playhead on its own. During playback it changes every couple of seconds, so only the views
+/// that show it watch it: the list, the video and the note about a long subtitle, and the inspector when it edits that
+/// subtitle. A change of `AppModel` itself redraws much more.
+@MainActor
+final class PlayheadCue: ObservableObject {
+    @Published fileprivate(set) var id: UUID?
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     let modelStore: ModelStore
@@ -140,8 +214,11 @@ final class AppModel: ObservableObject {
     }
     @Published private(set) var cuesEdited = false
     @Published private(set) var cuesLayoutKey = ""
-    /// Subtitle under the playhead.
-    @Published private(set) var currentCueID: UUID?
+    /// Subtitle under the playhead: `playheadCue` publishes it.
+    let playheadCue = PlayheadCue()
+    /// The subtitle image over the video.
+    let previewOverlay = PreviewOverlay()
+    var currentCueID: UUID? { playheadCue.id }
     @Published private(set) var transcriptFromCache = false
     /// Subtitles that share a style.
     @Published var groups: [SubtitleGroup] = []
@@ -639,7 +716,7 @@ final class AppModel: ObservableObject {
         clearSelection()
         cuesEdited = false
         cuesLayoutKey = ""
-        currentCueID = nil
+        playheadCue.id = nil
         transcriptFromCache = false
         activity = Activity(kind: .opening, title: L("Открываю файл…"), progress: nil)
 
@@ -789,7 +866,7 @@ final class AppModel: ObservableObject {
 
     private func refreshCurrentCue() {
         let id = cueIndex(at: player.currentTime).map { cues[$0].id }
-        if id != currentCueID { currentCueID = id }
+        if id != playheadCue.id { playheadCue.id = id }
     }
 
     /// Binary search over the cues (sorted by start).
@@ -1405,7 +1482,6 @@ final class AppModel: ObservableObject {
 
     // MARK: - Preview overlay
 
-    private var overlayCache: (key: Int, image: CGImage?)?
     private static let sampleCueID = UUID(uuidString: "00000000-0000-0000-0000-00000000C0DE")!
 
     /// Renderer for the current preset, groups and frame size (keeps font metrics between frames).
@@ -1438,21 +1514,6 @@ final class AppModel: ObservableObject {
         }
         let style = LayoutStyle(preset: preset, canvas: canvasSize)
         return CueBuilder.build(words: words, style: style).first?.text ?? sentence
-    }
-
-    /// Subtitle image for the preview, rendered with the export renderer at `pixelWidth`.
-    func overlayImage(pixelWidth: CGFloat) -> CGImage? {
-        guard let cue = previewCue, pixelWidth > 0 else { return nil }
-        let renderer = self.renderer
-        var hasher = Hasher()
-        hasher.combine(ObjectIdentifier(renderer))
-        hasher.combine(cue)
-        hasher.combine(Int(pixelWidth))
-        let key = hasher.finalize()
-        if let cache = overlayCache, cache.key == key { return cache.image }
-        let image = renderer.makeImage(cue, outputScale: pixelWidth / canvasSize.width)
-        overlayCache = (key, image)
-        return image
     }
 
     /// Layout of the preview subtitle (word rectangles for selection, block for dragging).
