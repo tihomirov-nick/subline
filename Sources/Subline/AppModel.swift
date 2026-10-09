@@ -1629,9 +1629,16 @@ final class AppModel: ObservableObject {
 
     // MARK: - Panels
 
+    /// Tests: gets the panel instead of the screen.
+    static var panelHandlerForTesting: ((NSSavePanel) -> Void)?
+
     /// Shows an open or save panel as a sheet of the window it belongs to (or of an open sheet); alone when there is
     /// no window yet. `done` runs after OK.
     static func present(_ panel: NSSavePanel, done: @escaping (NSSavePanel) -> Void) {
+        if let handler = panelHandlerForTesting {
+            handler(panel)
+            return
+        }
         // A sheet in front (models, fonts) takes the panel; otherwise the main window, even when Settings is in front.
         let key = NSApp.keyWindow
         let main = NSApp.windows.first { $0.identifier?.rawValue == "main" && $0.isVisible }

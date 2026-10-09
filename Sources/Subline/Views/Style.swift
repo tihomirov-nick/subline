@@ -104,8 +104,12 @@ enum Haptics {
 
 extension View {
     /// A black block with round continuous corners; what scrolls inside stays within them.
+    ///
+    /// The black stays inside the block. By default SwiftUI stretches a background into the safe area it touches; the
+    /// blocks touch the titlebar's, so the stretch lay over the top bar, invisible under the clip but still taking the
+    /// clicks, and «Открыть», «Экспорт» and the style switch only moved the window.
     func block(radius: CGFloat = Metrics.blockRadius) -> some View {
-        background(Palette.block)
+        background(Palette.block, ignoresSafeAreaEdges: [])
             .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
     }
 
