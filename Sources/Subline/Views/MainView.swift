@@ -22,6 +22,7 @@ struct MainView: View {
                     .block()
                 ResizeHandle(width: $sidebarWidth)
                 CanvasArea(player: model.player)
+                    .environment(\.fileIsDragged, dropTargeted)
                     .block()
                 if model.showInspector {
                     InspectorView()
@@ -58,13 +59,40 @@ struct MainView: View {
                 .environmentObject(model)
                 .environmentObject(model.fontStore)
         }
-        .alert(L("Ошибка"), isPresented: Binding(
-            get: { model.errorMessage != nil },
-            set: { if !$0 { model.errorMessage = nil } }
+        .sheet(isPresented: $model.showHelp) {
+            HelpView()
+        }
+        .sheet(isPresented: Binding(get: { model.problemDetails != nil }, set: { if !$0 { model.problemDetails = nil } })) {
+            ProblemDetailsView(text: model.problemDetails ?? "")
+        }
+        // A failure says what happened in the title; the technical text is one click further.
+        .alert(model.problem?.title ?? model.infoMessage?.title ?? "", isPresented: Binding(
+            get: { model.problem != nil || model.infoMessage != nil },
+            set: { if !$0 { model.problem = nil; model.infoMessage = nil } }
         )) {
+            // OK stays the default button (Return) next to «Подробнее…».
             Button("OK", role: .cancel) {}
+                .keyboardShortcut(.defaultAction)
+            if let details = model.problem?.details {
+                Button(L("Подробнее…")) {
+                    // After the alert has gone: one sheet at a time.
+                    DispatchQueue.main.async { model.problemDetails = details }
+                }
+            }
         } message: {
-            Text(model.errorMessage ?? "")
+            Text(model.problem?.message ?? model.infoMessage?.text ?? "")
+        }
+        .background {
+            // A question before an action that loses work (on a view of its own: one alert per view).
+            Color.clear.alert(model.confirmation?.title ?? "", isPresented: Binding(
+                get: { model.confirmation != nil },
+                set: { if !$0 { model.confirmation = nil } }
+            ), presenting: model.confirmation) { question in
+                Button(question.confirm, role: question.destructive ? .destructive : nil) { question.action() }
+                Button(L("Отмена"), role: .cancel) {}
+            } message: { question in
+                Text(question.message)
+            }
         }
         .onChange(of: modelStore.installed) { _ in
             model.ensureValidModelSelection()
@@ -83,7 +111,7 @@ struct MainView: View {
         _ = provider.loadObject(ofClass: URL.self) { url, _ in
             guard let url else { return }
             Task { @MainActor in
-                model.openMedia(url)
+                model.requestOpen(url)
             }
         }
         return true
@@ -107,16 +135,19 @@ private struct TopBar: View {
             .appButton(.secondary)
             .help(L("Открыть видео (⌘O)"))
             .disabled(model.isExporting)
+            // Always takes the click: when export cannot run, the click says why (the tooltip says it too).
+            let blocker = model.exportBlocker()
             SplitButton(title: L("Экспорт"),
-                        help: L("Сохранить видео с субтитрами (⌘E)"),
+                        help: blocker ?? (model.hasMedia && !model.hasVideo ? L("Экспортировать субтитры в SRT (⌘E)")
+                                                                           : L("Экспортировать видео с субтитрами (⌘E)")),
                         menuHelp: L("Другие форматы"),
-                        action: { model.export(model.media == nil || model.hasVideo ? .mp4H264 : .srt) },
+                        dimmed: blocker != nil,
+                        action: { model.export(model.defaultExportFormat) },
                         entries: {
                             ExportFormat.allCases.map { format in
-                                .item(format.title, enabled: !format.needsVideo || model.hasVideo) { model.export(format) }
+                                .item(format.title) { model.export(format) }
                             }
                         })
-                .disabled(model.cues.isEmpty || model.isBusy || model.updateInProgress)
             IconButton(symbol: "sidebar.right", help: model.showInspector ? L("Скрыть стиль (⌥⌘I)") : L("Показать стиль (⌥⌘I)"),
                        size: 28, filled: model.showInspector) {
                 withAnimation(Motion.animation(Motion.island, reduceMotion: reduceMotion)) {
@@ -130,22 +161,70 @@ private struct TopBar: View {
         .background(WindowDragArea())
     }
 
+    /// The file name, its summary and the saved mark. In a narrow window the summary gives way first, then the name
+    /// shortens in the middle; the summary never shrinks to a letter.
     private var title: some View {
+        ViewThatFits(in: .horizontal) {
+            titleRow(summary: true)
+            titleRow(summary: false)
+        }
+    }
+
+    private func titleRow(summary showsSummary: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(model.mediaURL?.lastPathComponent ?? "Subline")
                 .font(.system(size: 13, weight: .semibold))
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .layoutPriority(1)
-            if let summary = model.media?.summary {
+                .allowsHitTesting(false)
+            if showsSummary, let summary = model.media?.summary {
                 Text(summary)
                     .font(.system(size: 11.5))
                     .foregroundStyle(Palette.tertiary)
                     .lineLimit(1)
+                    .fixedSize()
+                    .allowsHitTesting(false)
+            }
+            if !model.cues.isEmpty {
+                SavedMark(flash: model.savedFlash)
             }
         }
-        .allowsHitTesting(false)
     }
+}
+
+/// The work is written to disk by itself: nothing to save by hand before closing. ⌘S lights the mark up for a moment.
+private struct SavedMark: View {
+    let flash: Int
+    @State private var lit = false
+
+    var body: some View {
+        Label(L("Сохранено"), systemImage: "checkmark")
+            .font(.system(size: 11.5))
+            .foregroundStyle(lit ? Color.white : Palette.tertiary)
+            .labelStyle(.titleAndIcon)
+            .lineLimit(1)
+            .fixedSize()
+            .help(L("Субтитры и правки сохраняются сами. Если закрыть Subline, при следующем запуске это видео откроется вместе с ними"))
+            .onChange(of: flash) { _ in
+                withAnimation(.easeOut(duration: 0.15)) { lit = true }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                    withAnimation(.easeOut(duration: 0.6)) { lit = false }
+                }
+            }
+    }
+}
+
+extension EnvironmentValues {
+    /// A file is being dragged over the window: the card in the middle of the video makes way for the drop outline.
+    var fileIsDragged: Bool {
+        get { self[FileIsDraggedKey.self] }
+        set { self[FileIsDraggedKey.self] = newValue }
+    }
+}
+
+private struct FileIsDraggedKey: EnvironmentKey {
+    static let defaultValue = false
 }
 
 /// The gap between the subtitles and the video: dragging it makes the subtitles wider or narrower.

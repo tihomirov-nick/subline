@@ -2,63 +2,81 @@ import SwiftUI
 import SublineCore
 
 /// Playback under the video: subtitle and frame stepping, play/pause, the scrubber with the subtitles marked on it.
+/// The scrubber keeps at least 160 pt: in a narrow window the remaining time goes first, then the frame buttons, the
+/// subtitle buttons and the time (all of them have keys and menu items too).
 struct TransportBar: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject var player: PlayerController
 
+    static let scrubberMinWidth: CGFloat = 160
+
     var body: some View {
-        let duration = max(player.duration, 0.001)
-        HStack(spacing: 2) {
-            IconButton(symbol: "backward.end.fill", help: L("Предыдущий субтитр (↑)"), size: 28, filled: false) {
-                model.selectAdjacentCue(-1)
-            }
-            .disabled(model.cues.isEmpty)
-            IconButton(symbol: "backward.frame.fill", help: L("Кадр назад (←), секунда назад (⇧←)"), size: 28, filled: false) {
-                player.step(frames: -1)
-            }
-            PlayButton(player: player)
-                .padding(.horizontal, 3)
-            IconButton(symbol: "forward.frame.fill", help: L("Кадр вперёд (→), секунда вперёд (⇧→)"), size: 28, filled: false) {
-                player.step(frames: 1)
-            }
-            IconButton(symbol: "forward.end.fill", help: L("Следующий субтитр (↓)"), size: 28, filled: false) {
-                model.selectAdjacentCue(1)
-            }
-            .disabled(model.cues.isEmpty)
-
-            Text(TransportBar.format(player.currentTime))
-                .font(.system(size: 12.5, weight: .semibold).monospacedDigit())
-                .lineLimit(1)
-                .frame(width: 66, alignment: .trailing)
-                .padding(.leading, 6)
-                .help(Text(verbatim: L("Кадр %@", "\(player.currentFrame)")))
-
-            Scrubber(player: player, cues: model.cues, duration: duration)
-                .padding(.horizontal, 10)
-
-            Text("−" + TransportBar.format(max(0, duration - player.currentTime)))
-                .font(.system(size: 12.5, weight: .medium).monospacedDigit())
-                .foregroundStyle(Palette.secondary)
-                .lineLimit(1)
-                .frame(width: 70, alignment: .leading)
-                .help(L("Осталось"))
+        ViewThatFits(in: .horizontal) {
+            bar(cueButtons: true, frameButtons: true, time: true, remaining: true)
+            bar(cueButtons: true, frameButtons: true, time: true, remaining: false)
+            bar(cueButtons: true, frameButtons: false, time: true, remaining: false)
+            bar(cueButtons: false, frameButtons: false, time: true, remaining: false)
+            bar(cueButtons: false, frameButtons: false, time: false, remaining: false)
         }
-        .padding(.leading, 7)
-        .padding(.trailing, 10)
         .frame(height: 48)
         .background(Capsule().fill(Palette.card))
     }
 
-    /// "0:12.48" or "1:02:03.40".
-    static func format(_ seconds: Double) -> String {
-        // Small epsilon: 9.2 s must read 9.20, not 9.19 (binary floating point).
-        let total = Int((max(0, seconds) * 100 + 0.001).rounded(.down))
-        let cs = total % 100
-        let s = (total / 100) % 60
-        let m = (total / 6000) % 60
-        let h = total / 360000
-        if h > 0 { return String(format: "%d:%02d:%02d.%02d", h, m, s, cs) }
-        return String(format: "%d:%02d.%02d", m, s, cs)
+    private func bar(cueButtons: Bool, frameButtons: Bool, time: Bool, remaining: Bool) -> some View {
+        let duration = max(player.duration, 0.001)
+        let clock = model.clockFormat
+        return HStack(spacing: 2) {
+            if cueButtons {
+                IconButton(symbol: "backward.end.fill", help: L("Предыдущий субтитр (↑)"), size: 28, filled: false) {
+                    model.selectAdjacentCue(-1)
+                }
+                .disabled(model.cues.isEmpty)
+            }
+            if frameButtons {
+                IconButton(symbol: "backward.frame.fill", help: L("Кадр назад (←), секунда назад (⇧←)"), size: 28, filled: false) {
+                    player.step(frames: -1)
+                }
+            }
+            PlayButton(player: player)
+                .padding(.horizontal, 3)
+            if frameButtons {
+                IconButton(symbol: "forward.frame.fill", help: L("Кадр вперёд (→), секунда вперёд (⇧→)"), size: 28, filled: false) {
+                    player.step(frames: 1)
+                }
+            }
+            if cueButtons {
+                IconButton(symbol: "forward.end.fill", help: L("Следующий субтитр (↓)"), size: 28, filled: false) {
+                    model.selectAdjacentCue(1)
+                }
+                .disabled(model.cues.isEmpty)
+            }
+
+            if time {
+                Text(clock.string(player.currentTime))
+                    .font(.system(size: 12.5, weight: .semibold).monospacedDigit())
+                    .lineLimit(1)
+                    .frame(width: clock.width(size: 12.5, weight: .semibold), alignment: .trailing)
+                    .padding(.leading, 6)
+                    .help(Text(verbatim: L("Кадр %@", "\(player.currentFrame)")))
+                    .accessibilityHidden(true)
+            }
+
+            Scrubber(player: player, cues: model.cues, duration: duration, clock: clock)
+                .frame(minWidth: Self.scrubberMinWidth)
+                .padding(.horizontal, 10)
+
+            if remaining {
+                Text("−" + clock.string(max(0, duration - player.currentTime)))
+                    .font(.system(size: 12.5, weight: .medium).monospacedDigit())
+                    .foregroundStyle(Palette.secondary)
+                    .lineLimit(1)
+                    .frame(width: clock.width(size: 12.5, weight: .medium) + 8, alignment: .leading)
+                    .help(L("Осталось"))
+                    .accessibilityHidden(true)
+            }
+        }
+        .padding(.leading, 7)
+        .padding(.trailing, 10)
     }
 }
 
@@ -77,7 +95,7 @@ private struct PlayButton: View {
                 .background(Circle().fill(Brand.mark))
                 .contentShape(Circle())
         }
-        .buttonStyle(PressStyle(scale: 0.88))
+        .buttonStyle(PressStyle(scale: 0.88, ring: Circle()))
         .disabled(!player.isReady)
         .opacity(player.isReady ? 1 : 0.4)
         .help(player.isPlaying ? L("Пауза (пробел)") : L("Воспроизвести (пробел)"))
@@ -96,11 +114,13 @@ private struct PlayButton: View {
 }
 
 /// Timeline track: jumps on press, follows the pointer 1:1, shows the time under the pointer and where
-/// subtitles are. The playhead is a white pill that grows while the pointer is over the track.
+/// subtitles are. The playhead is a white pill that grows while the pointer is over the track. With keyboard navigation
+/// it takes the focus: ← and → move a second; VoiceOver sees it as a slider of the position.
 struct Scrubber: View {
     @ObservedObject var player: PlayerController
     let cues: [Cue]
     let duration: Double
+    var clock = ClockFormat(duration: 0)
     @State private var hoverX: CGFloat?
     @State private var isDragging = false
     @State private var resumeAfterDrag = false
@@ -128,7 +148,7 @@ struct Scrubber: View {
                     .shadow(color: .black.opacity(0.5), radius: 3, y: 1)
                     .offset(x: min(max(0, width * progress - head.width / 2), width - head.width))
                 if let x = hoverX, !isDragging {
-                    Text(TransportBar.format(Double(x / width) * duration))
+                    Text(clock.string(Double(x / width) * duration))
                         .font(.system(size: 11, weight: .semibold).monospacedDigit())
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
@@ -165,6 +185,14 @@ struct Scrubber: View {
             }
         }
         .frame(height: 30)
+        .keyboardAdjustable(arrows: { step in player.seek(to: player.currentTime + Double(step)) })
+        .accessibilityRepresentation {
+            Slider(value: Binding(get: { min(max(0, player.currentTime), duration) }, set: { player.seek(to: $0) }),
+                   in: 0...max(duration, 0.001)) {
+                Text(L("Позиция"))
+            }
+            .accessibilityValue(L("%@ из %@", clock.string(player.currentTime), clock.string(duration)))
+        }
     }
 }
 

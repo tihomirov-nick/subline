@@ -45,5 +45,17 @@ let package = Package(
             dependencies: ["SublineCore"],
             path: "Sources/SublineCLI"
         ),
+        // `swift test`: subtitle editing, layout and export without the UI
+        .testTarget(
+            name: "SublineCoreTests",
+            dependencies: ["SublineCore"],
+            path: "Tests/SublineCoreTests"
+        ),
+        // `swift test`: the window's model and views, rendered offscreen (nothing appears on screen)
+        .testTarget(
+            name: "SublineTests",
+            dependencies: ["Subline", "SublineCore"],
+            path: "Tests/SublineTests"
+        ),
     ]
 )

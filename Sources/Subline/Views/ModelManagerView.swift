@@ -3,11 +3,22 @@ import AppKit
 import UniformTypeIdentifiers
 import SublineCore
 
+/// A model the person asked to delete: Subline asks first, with its size (a download of hundreds of megabytes to get it
+/// back) and the note that Slovo uses the same folder.
+struct ModelDeletion: Identifiable {
+    let id = UUID()
+    let name: String
+    let size: String
+    let custom: Bool
+    let delete: () -> Void
+}
+
 /// Downloading and choosing Whisper models: one card with a row per model, the action on the right of each.
 struct ModelManagerView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var modelStore: ModelStore
     @Environment(\.dismiss) private var dismiss
+    @State private var deletion: ModelDeletion?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -17,10 +28,19 @@ struct ModelManagerView: View {
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
+                    if !modelStore.hasAnyModel {
+                        // Opened by itself when a video came before the model: why the sheet is here.
+                        Label(L("Чтобы распознавать речь, нужна модель. Скачайте рекомендуемую, это делается один раз"),
+                              systemImage: "arrow.down.circle")
+                            .font(.system(size: 12.5, weight: .medium))
+                            .padding(12)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .card()
+                    }
                     VStack(spacing: 0) {
                         ForEach(Array(ModelCatalog.models.enumerated()), id: \.element.id) { index, info in
                             if index > 0 { Separator() }
-                            ModelRow(info: info)
+                            ModelRow(info: info, deletion: $deletion)
                         }
                     }
                     .card()
@@ -30,7 +50,7 @@ struct ModelManagerView: View {
                             VStack(spacing: 0) {
                                 ForEach(Array(modelStore.customModels.enumerated()), id: \.element) { index, url in
                                     if index > 0 { Separator() }
-                                    CustomModelRow(url: url)
+                                    CustomModelRow(url: url, deletion: $deletion)
                                 }
                             }
                             .card()
@@ -69,18 +89,34 @@ struct ModelManagerView: View {
         .foregroundStyle(.white)
         .environment(\.colorScheme, .dark)
         .onAppear { modelStore.refresh() }
+        .alert(L("Удалить модель «%@»?", deletion?.name ?? ""), isPresented: Binding(
+            get: { deletion != nil }, set: { if !$0 { deletion = nil } }
+        ), presenting: deletion) { item in
+            Button(L("Удалить"), role: .destructive) { item.delete() }
+            Button(L("Отмена"), role: .cancel) {}
+        } message: { item in
+            Text(Self.deletionMessage(item))
+        }
+    }
+
+    static func deletionMessage(_ item: ModelDeletion) -> String {
+        let back = item.custom ? L("Вернуть её можно кнопкой «Своя модель…», если файл модели сохранился где-то ещё.")
+                               : L("Чтобы распознавать ею снова, модель придётся скачать заново.")
+        return L("С диска удалится %@. Папка моделей общая с приложением Slovo, поэтому модель пропадёт и там.", item.size) + " " + back
     }
 
     private func addCustomModel() {
         let panel = NSOpenPanel()
         panel.title = L("Выберите модель Whisper (ggml .bin)")
         panel.allowedContentTypes = [UTType(filenameExtension: "bin") ?? .data]
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        modelStore.importModel(from: url)
+        AppModel.present(panel) { [modelStore] panel in
+            if let url = panel.url { modelStore.importModel(from: url) }
+        }
     }
 }
 
-/// The title of a sheet with «Готово» on the right; what the sheet is for is in the tooltip of the title.
+/// The title of a sheet with «Готово» on the right; what the sheet is for is in the tooltip of the title. Return and Esc
+/// close the sheet too.
 struct SheetHeader<Accessory: View>: View {
     let title: String
     var help: String?
@@ -93,11 +129,21 @@ struct SheetHeader<Accessory: View>: View {
                 .font(.system(size: 15, weight: .semibold))
                 .lineLimit(1)
                 .help(help ?? "")
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityHint(help ?? "")
             Spacer(minLength: 8)
             accessory
             Button(L("Готово"), action: done)
                 .appButton(.primary)
                 .keyboardShortcut(.defaultAction)
+                .background {
+                    // Esc: an invisible button with the cancel shortcut (a button has one shortcut).
+                    Button("", action: done)
+                        .keyboardShortcut(.cancelAction)
+                        .opacity(0)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
         }
         .padding(.horizontal, Metrics.inset + 2)
         .padding(.top, Metrics.inset + 2)
@@ -118,6 +164,7 @@ private struct ModelRow: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var modelStore: ModelStore
     let info: WhisperModelInfo
+    @Binding var deletion: ModelDeletion?
 
     var body: some View {
         let installed = modelStore.installed.contains(info.id)
@@ -155,7 +202,7 @@ private struct ModelRow: View {
                         .help(download.retryMessage ?? "")
                 }
                 if !download.verifying {
-                    IconButton(symbol: "xmark", help: L("Отменить загрузку"), size: 24) {
+                    IconButton(symbol: "xmark", help: L("Отменить скачивание"), size: 24) {
                         modelStore.cancelDownload(info.id)
                     }
                 }
@@ -173,9 +220,11 @@ private struct ModelRow: View {
                             .fixedSize()
                     }
                     IconButton(symbol: "trash", help: L("Удалить модель с диска"), size: 24) {
-                        if model.modelID == info.id { model.modelID = "" }
-                        modelStore.delete(info)
-                        model.ensureValidModelSelection()
+                        deletion = ModelDeletion(name: info.name, size: info.sizeText, custom: false) {
+                            if model.modelID == info.id { model.modelID = "" }
+                            modelStore.delete(info)
+                            model.ensureValidModelSelection()
+                        }
                     }
                 } else {
                     Button(L("Скачать")) { modelStore.download(info) }
@@ -187,6 +236,11 @@ private struct ModelRow: View {
         }
         .padding(.horizontal, 12)
         .frame(minHeight: 54)
+        // A downloaded model is chosen by a click anywhere in its row, not only on "Choose".
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if installed && !selected && download == nil { model.modelID = info.id }
+        }
     }
 
     private func progressText(_ state: ModelStore.DownloadState) -> String {
@@ -204,6 +258,7 @@ private struct CustomModelRow: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var modelStore: ModelStore
     let url: URL
+    @Binding var deletion: ModelDeletion?
 
     var body: some View {
         let id = "custom:" + url.lastPathComponent
@@ -226,12 +281,19 @@ private struct CustomModelRow: View {
                     .fixedSize()
             }
             IconButton(symbol: "trash", help: L("Удалить модель с диска"), size: 24) {
-                if selected { model.modelID = "" }
-                modelStore.deleteCustom(url)
-                model.ensureValidModelSelection()
+                let bytes = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map { Int64($0) } ?? 0
+                deletion = ModelDeletion(name: url.lastPathComponent, size: formatBytes(bytes), custom: true) {
+                    if selected { model.modelID = "" }
+                    modelStore.deleteCustom(url)
+                    model.ensureValidModelSelection()
+                }
             }
         }
         .padding(.horizontal, 12)
         .frame(minHeight: 48)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if !selected { model.modelID = id }
+        }
     }
 }

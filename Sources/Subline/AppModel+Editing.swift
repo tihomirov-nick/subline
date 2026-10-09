@@ -69,8 +69,8 @@ extension AppModel {
             return L("Группа «%@»", "\(group(id)?.name ?? "")")
         case .cues:
             let count = scopeCueIDs.count
-            if count == 0 { return L("Под курсором нет субтитра") }
-            return selectedCueIDs.isEmpty ? L("Субтитр под курсором") : L("Выбрано субтитров: %@", "\(count)")
+            if count == 0 { return L("На текущем кадре нет субтитра") }
+            return selectedCueIDs.isEmpty ? L("Субтитр на текущем кадре") : L("Выбрано субтитров: %@", "\(count)")
         case .words:
             guard let selection = wordSelection, let cue = cues.first(where: { $0.id == selection.cueID }) else { return L("Слова") }
             let words = CueText.words(cue.text)

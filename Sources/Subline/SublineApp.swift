@@ -41,20 +41,41 @@ struct SublineApp: App {
                 Button(L("Открыть видео…")) { model.showOpenPanel() }
                     .keyboardShortcut("o", modifiers: .command)
                     .disabled(model.isExporting)
+                Menu(L("Открыть недавние")) {
+                    ForEach(model.recentFiles, id: \.self) { url in
+                        Button(model.recentTitle(url)) { model.openRecent(url) }
+                    }
+                    Divider()
+                    Button(L("Очистить меню")) { model.clearRecent() }
+                }
+                .disabled(model.recentFiles.isEmpty || model.isExporting)
             }
             CommandGroup(after: .newItem) {
-                Button(L("Сохранить видео с субтитрами…")) { model.export(model.hasVideo ? .mp4H264 : .srt) }
-                    .keyboardShortcut("e", modifiers: .command)
-                    .disabled(model.cues.isEmpty || model.isBusy || model.updateInProgress)
+                // The work is saved by itself; ⌘S writes it at once and says so.
+                Button(L("Сохранить правки")) { model.saveNow() }
+                    .keyboardShortcut("s", modifiers: .command)
+                    .disabled(model.transcript == nil)
+                Divider()
+                // Always available: when export cannot run, Subline says why.
+                Button(model.hasMedia && !model.hasVideo ? L("Экспортировать субтитры…") : L("Экспортировать видео с субтитрами…")) {
+                    model.export(model.defaultExportFormat)
+                }
+                .keyboardShortcut("e", modifiers: .command)
                 Menu(L("Экспорт в формате")) {
                     ForEach(ExportFormat.allCases) { format in
                         Button(format.title) { model.export(format) }
-                            .disabled(model.cues.isEmpty || model.isBusy || model.updateInProgress || (format.needsVideo && !model.hasVideo))
                     }
                 }
+                Button(L("Показать последний экспорт в Finder")) { model.revealLastExport() }
+                    .disabled(model.lastExportURL == nil)
                 Divider()
                 Button(L("Закрыть видео")) { model.closeMedia() }
                     .disabled(model.mediaURL == nil || model.isBusy)
+            }
+            // ⌘W goes through the same question as the red button while recognition or export runs.
+            CommandGroup(replacing: .saveItem) {
+                Button(L("Закрыть окно")) { WindowCloseGuard.shared.closeKeyWindow() }
+                    .keyboardShortcut("w", modifiers: .command)
             }
             CommandGroup(after: .sidebar) {
                 Button(model.showInspector ? L("Скрыть стиль") : L("Показать стиль")) {
@@ -62,23 +83,31 @@ struct SublineApp: App {
                 }
                 .keyboardShortcut("i", modifiers: [.command, .option])
             }
-            // Space and the arrow keys work in the window itself (except while typing text).
+            // Space, the arrows and ⌫ are shortcuts of these items, but the keys are handled by KeyboardController: in
+            // the player it runs the command, in text and on focused controls the key goes to them.
             CommandMenu(L("Воспроизведение")) {
-                Button(model.player.isPlaying ? L("Пауза   (пробел)") : L("Воспроизвести   (пробел)")) { model.player.togglePlay() }
+                Button(model.player.isPlaying ? L("Пауза") : L("Воспроизвести")) { model.player.togglePlay() }
+                    .keyboardShortcut(.space, modifiers: [])
                     .disabled(!model.player.isReady)
                 Divider()
-                Button(L("Кадр вперёд   (→)")) { model.player.step(frames: 1) }
+                Button(L("Кадр вперёд")) { model.player.step(frames: 1) }
+                    .keyboardShortcut(.rightArrow, modifiers: [])
                     .disabled(!model.hasMedia)
-                Button(L("Кадр назад   (←)")) { model.player.step(frames: -1) }
+                Button(L("Кадр назад")) { model.player.step(frames: -1) }
+                    .keyboardShortcut(.leftArrow, modifiers: [])
                     .disabled(!model.hasMedia)
-                Button(L("Секунда вперёд   (⇧→)")) { model.player.seek(to: model.player.currentTime + 1) }
+                Button(L("Секунда вперёд")) { model.player.seek(to: model.player.currentTime + 1) }
+                    .keyboardShortcut(.rightArrow, modifiers: .shift)
                     .disabled(!model.hasMedia)
-                Button(L("Секунда назад   (⇧←)")) { model.player.seek(to: model.player.currentTime - 1) }
+                Button(L("Секунда назад")) { model.player.seek(to: model.player.currentTime - 1) }
+                    .keyboardShortcut(.leftArrow, modifiers: .shift)
                     .disabled(!model.hasMedia)
                 Divider()
-                Button(L("Следующий субтитр   (↓)")) { model.selectAdjacentCue(1) }
+                Button(L("Следующий субтитр")) { model.selectAdjacentCue(1) }
+                    .keyboardShortcut(.downArrow, modifiers: [])
                     .disabled(model.cues.isEmpty)
-                Button(L("Предыдущий субтитр   (↑)")) { model.selectAdjacentCue(-1) }
+                Button(L("Предыдущий субтитр")) { model.selectAdjacentCue(-1) }
+                    .keyboardShortcut(.upArrow, modifiers: [])
                     .disabled(model.cues.isEmpty)
             }
             CommandMenu(L("Стиль")) {
@@ -101,16 +130,56 @@ struct SublineApp: App {
                 Button(L("Добавить файлы шрифтов…")) { model.addFonts() }
             }
             CommandMenu(L("Субтитры")) {
-                Button(L("Распознать речь")) { model.startTranscription() }
+                Button(L("Распознать речь")) { model.requestTranscription() }
                     .keyboardShortcut("r", modifiers: .command)
-                    .disabled(model.media == nil || model.isBusy || model.updateInProgress)
+                    .disabled(!model.canTranscribe)
+                Menu(L("Язык речи")) {
+                    ForEach(WhisperEngine.languages, id: \.code) { language in
+                        Toggle(language.name, isOn: Binding(get: { model.language == language.code },
+                                                            set: { if $0 { model.language = language.code } }))
+                    }
+                }
                 Button(L("Пересобрать по пресету")) { model.rebuildCues() }
                     .disabled(model.transcript == nil || model.isBusy)
-                Button(L("Разделить субтитр по курсору")) { model.splitCurrentCue() }
+                Divider()
+                // The subtitle being typed in, the selected one or the one under the playhead.
+                Button(L("Разделить субтитр")) { model.splitCurrentCue() }
                     .keyboardShortcut("b", modifiers: .command)
-                    .disabled(model.currentCue == nil)
+                    .disabled(!model.canSplit(model.targetCueID))
+                Button(L("Объединить со следующим")) {
+                    if let id = model.targetCueID { model.mergeWithNext(id) }
+                }
+                .keyboardShortcut("j", modifiers: .command)
+                .disabled(!model.canMergeWithNext(model.targetCueID))
+                Button(L("Перенести первое слово в предыдущий субтитр")) {
+                    if let id = model.targetCueID { model.moveFirstWordToPrevious(id) }
+                }
+                .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+                .disabled(!model.canMoveFirstWordToPrevious(model.targetCueID))
+                Button(L("Перенести последнее слово в следующий субтитр")) {
+                    if let id = model.targetCueID { model.moveLastWordToNext(id) }
+                }
+                .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+                .disabled(!model.canMoveLastWordToNext(model.targetCueID))
+                Button(L("Добавить субтитр после")) {
+                    if let id = model.targetCueID { model.insertCue(after: id) }
+                }
+                .keyboardShortcut("n", modifiers: [.command, .option])
+                .disabled(model.targetCueID == nil)
+                Divider()
+                Button(L("Выбрать все субтитры")) { model.selectAllCues() }
+                    .disabled(model.cues.isEmpty)
+                Button(model.deletableCueIDs.count > 1 ? L("Удалить выбранные субтитры") : L("Удалить субтитр")) {
+                    model.deleteCues(model.deletableCueIDs)
+                }
+                .keyboardShortcut(.delete, modifiers: [])
+                .disabled(model.deletableCueIDs.isEmpty || model.isBusy)
                 Divider()
                 Button(L("Модели распознавания…")) { model.showModelManager = true }
+            }
+            CommandGroup(replacing: .help) {
+                Button(L("Справка Subline")) { model.showHelp = true }
+                    .keyboardShortcut("?", modifiers: .command)
             }
         }
 
@@ -129,9 +198,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     func attach(_ model: AppModel) {
         self.model = model
+        WindowCloseGuard.shared.mayClose = { [weak model] in model?.confirmStopForClosing() ?? true }
         if let url = pendingURLs.first {
             pendingURLs.removeAll()
             model.openMedia(url)
+        } else if !DebugHooks.opensFile {
+            // The video of the last session comes back with its subtitles, unless a file is being opened from Finder.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                guard let self, self.pendingURLs.isEmpty, model.mediaURL == nil else { return }
+                model.restoreLastSession()
+            }
         }
         // The window focuses its first text field on opening (a value in the inspector). Nothing is being
         // typed yet, so take that focus back: Space and the arrows then control the player right away.
@@ -146,7 +222,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let url = urls.first else { return }
         Task { @MainActor in
             if let model = self.model {
-                model.openMedia(url)
+                model.requestOpen(url)
             } else {
                 self.pendingURLs = [url]
             }
@@ -190,9 +266,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         attempt(20)
     }
 
-    /// An open sheet (model manager) would otherwise block quitting.
+    /// An open sheet (model manager) would otherwise block quitting. Running recognition or export is lost on quitting,
+    /// so the person is asked first; subtitles and edits are written to disk.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        MainActor.assumeIsolated {
+        MainActor.assumeIsolated { () -> NSApplication.TerminateReply in
+            if let model, !model.confirmStopForClosing() { return .terminateCancel }
             model?.flushPendingSaves()
             model?.showModelManager = false
             model?.showFontLibrary = false
@@ -200,8 +278,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if let sheet = window.attachedSheet { window.endSheet(sheet) }
             }
             model?.cancelActivity()
+            return .terminateNow
         }
-        return .terminateNow
     }
 }
 
@@ -215,11 +293,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 enum DebugHooks {
     static weak var model: AppModel?
     static let forceActive = ProcessInfo.processInfo.environment["SUBLINE_FORCE_ACTIVE"] != nil
+    /// SUBLINE_OPEN opens a file at launch: the last session does not come back then.
+    static let opensFile = ProcessInfo.processInfo.environment["SUBLINE_OPEN"] != nil
     /// The "still" action: the video shows its still frame instead of the player layer, which offscreen renders miss.
     static var stillFrame = false
 
     nonisolated static func install() {
         let env = ProcessInfo.processInfo.environment
+        _ = MainActor.assumeIsolated { opensFile }
         // A restarted copy of the app inherits the environment and must not repeat the test actions.
         for name in ["SUBLINE_OPEN", "SUBLINE_SNAPSHOTS", "SUBLINE_ACTIONS", "SUBLINE_QUIT_AFTER"] { unsetenv(name) }
         Task { @MainActor in
@@ -333,6 +414,7 @@ enum DebugHooks {
         case "lines":
             if parts.count > 1, let lines = Int(parts[1]) { model.preset.maxLines = lines }
         case "transcribe": model.startTranscription()
+        case "help": model.showHelp = true
         case "download":
             if parts.count > 1, let info = ModelCatalog.model(id: parts[1]) { model.modelStore.download(info) }
         case "render-inspector":
@@ -494,20 +576,21 @@ enum DebugHooks {
         case "render-glyph":
             // render-glyph=<marks typed>,<path>: the menu bar icon during recognition, white, 8 pixels per point
             let args = parts.count > 1 ? parts[1].split(separator: ",", maxSplits: 1).map(String.init) : []
-            if args.count == 2, let typed = Double(args[0]),
-               let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 128, pixelsHigh: 128, bitsPerSample: 8,
-                                          samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
-                                          bytesPerRow: 0, bitsPerPixel: 0) {
-                rep.size = NSSize(width: 16, height: 16)
-                NSGraphicsContext.saveGraphicsState()
-                NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-                let rect = NSRect(x: 0, y: 0, width: 16, height: 16)
-                WorkGlyph.image(.typing(typed)).draw(in: rect)
-                NSColor.white.set()
-                rect.fill(using: .sourceAtop)
-                NSGraphicsContext.restoreGraphicsState()
-                try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: args[1]))
-            }
+            guard args.count == 2, let typed = Double(args[0]) else { break }
+            let image = WorkGlyph.image(.typing(typed))
+            guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(image.size.width * 8),
+                                             pixelsHigh: Int(image.size.height * 8), bitsPerSample: 8, samplesPerPixel: 4,
+                                             hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0,
+                                             bitsPerPixel: 0) else { break }
+            rep.size = image.size
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+            let rect = NSRect(origin: .zero, size: image.size)
+            image.draw(in: rect)
+            NSColor.white.set()
+            rect.fill(using: .sourceAtop)
+            NSGraphicsContext.restoreGraphicsState()
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: args[1]))
         case "activity":
             // activity=<transcribing|exporting>,<0…1>: the window shows a long job without running it. Only while the
             // menu bar icon is off, so nothing appears outside the window.

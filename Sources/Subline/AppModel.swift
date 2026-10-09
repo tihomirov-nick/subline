@@ -42,6 +42,32 @@ struct ExportNotice: Identifiable, Equatable {
     let url: URL
 }
 
+/// A message without an error: why something cannot be done right now.
+struct InfoMessage: Equatable {
+    let title: String
+    let text: String
+}
+
+/// A question before an action that loses work: what will happen, the button that does it, and «Отмена».
+struct Confirmation: Identifiable {
+    let id = UUID()
+    let title: String
+    let message: String
+    let confirm: String
+    var destructive = true
+    let action: () -> Void
+}
+
+/// The caret in the text of a subtitle, kept for a moment after typing ends (a click on "Split" ends typing first).
+struct TextCaret: Equatable {
+    let cueID: UUID
+    /// UTF-16 offset, as AppKit counts it.
+    let offset: Int
+    /// The text the offset belongs to.
+    let text: String
+    let time: Date
+}
+
 /// Thread-safe cancellation flag for code that cannot use Task cancellation (whisper callbacks).
 final class CancelFlag: @unchecked Sendable {
     private let lock = NSLock()
@@ -77,6 +103,8 @@ final class AppModel: ObservableObject {
         didSet {
             defaults.set(selectedPresetID.uuidString, forKey: "selectedPreset")
             styleChanged()
+            // The video keeps the preset it is styled with.
+            if oldValue != selectedPresetID { scheduleCacheSave() }
         }
     }
 
@@ -102,7 +130,11 @@ final class AppModel: ObservableObject {
 
     // MARK: Subtitles
 
-    @Published private(set) var transcript: Transcript?
+    @Published private(set) var transcript: Transcript? {
+        didSet { transcriptRevision += 1 }
+    }
+    /// Changes with every new transcript: a cut made in the background for an older one is dropped.
+    private var transcriptRevision = 0
     @Published var cues: [Cue] = [] {
         didSet { refreshCurrentCue() }
     }
@@ -113,6 +145,13 @@ final class AppModel: ObservableObject {
     @Published private(set) var transcriptFromCache = false
     /// Subtitles that share a style.
     @Published var groups: [SubtitleGroup] = []
+    /// The subtitle whose text is being typed in the list.
+    @Published var editingCueID: UUID?
+    /// Typing should move to the text of this subtitle (Tab).
+    @Published var textFocusRequest: UUID?
+    var textCaret: TextCaret?
+    /// The subtitle whose text changes already have an undo step in this round of typing.
+    private var textUndoCueID: UUID?
 
     // MARK: Editing scope (what the inspector changes)
 
@@ -129,11 +168,30 @@ final class AppModel: ObservableObject {
     @Published private(set) var activity: Activity? {
         didSet { menuBarIcon.show(activity) }
     }
-    /// Shown in an alert, which comes with the failure sound.
-    @Published var errorMessage: String? {
-        didSet { if errorMessage != nil { SoundEffects.play(.failure) } }
+    /// A failure, shown in an alert with the failure sound: what happened, why and what to do. Its technical text
+    /// opens under «Подробнее».
+    @Published var problem: Problem? {
+        didSet { if problem != nil { SoundEffects.play(.failure) } }
     }
+    /// The technical text of a problem, in a sheet of its own.
+    @Published var problemDetails: String?
+    /// The message of the problem on screen.
+    var errorMessage: String? { problem?.message }
+    /// The result of the last export: it stays over the video until it is closed or another job starts.
     @Published var exportNotice: ExportNotice?
+    /// Shown in an alert without the failure sound.
+    @Published var infoMessage: InfoMessage?
+    /// A question before an action that would lose work.
+    @Published var confirmation: Confirmation?
+    @Published var showHelp = false
+    /// ⌘S: the "Saved" mark lights up for a moment.
+    @Published private(set) var savedFlash = 0
+    /// Videos opened lately, the newest first (File → Open Recent).
+    @Published private(set) var recentFiles: [URL] = []
+    /// The file of the last export (File → Show Last Export), kept between launches.
+    @Published private(set) var lastExportURL: URL?
+    /// The video of the last session came back with its subtitles (the name is shown for a few seconds).
+    @Published var restoreNotice: String?
     @Published var showModelManager = false
     @Published var showInspector: Bool { didSet { defaults.set(showInspector, forKey: "showInspector") } }
     @Published var inspectorTab: InspectorTab = .text
@@ -154,10 +212,27 @@ final class AppModel: ObservableObject {
     private var pendingFrameTime: Double?
     private var presetSaveTask: Task<Void, Never>?
     private var cacheSaveTask: Task<Void, Never>?
-    private var pendingCacheSave: (entry: TranscriptCache.Entry, url: URL)?
+    private var pendingCacheSave: (entry: TranscriptCache.Entry, url: URL, key: String?)?
+    /// The content key of the open file's saved work (computed once when it opens).
+    private var cacheKey: String?
     private var rebuildTask: Task<Void, Never>?
-    private var noticeTask: Task<Void, Never>?
+    /// A long transcript being cut into subtitles in the background.
+    private var buildJob: Task<[Cue]?, Never>?
+    private var restoreNoticeTask: Task<Void, Never>?
+    private var srtTask: Task<Void, Never>?
     private var updateWatch: AnyCancellable?
+    private var fitCache: (renderer: CueRenderer, fits: [UUID: (hash: Int, fit: LineFit)])?
+
+    /// The video being worked on and the playhead, for the next launch.
+    private enum SessionKey {
+        static let media = "lastMediaPath"
+        static let time = "lastMediaTime"
+        static let recent = "recentMedia"
+        static let lastExport = "lastExportPath"
+    }
+
+    /// Transcripts with more words are cut into subtitles in the background (about 20 minutes of speech).
+    static let backgroundBuildWords = 3000
 
     init() {
         WhisperEngine.setLoggingEnabled(false)
@@ -176,15 +251,20 @@ final class AppModel: ObservableObject {
         let savedPreset = defaults.string(forKey: "selectedPreset").flatMap(UUID.init(uuidString:))
         selectedPresetID = loaded.first(where: { $0.id == savedPreset })?.id ?? loaded[0].id
         modelID = defaults.string(forKey: "modelID") ?? ModelCatalog.recommended.id
-        language = defaults.string(forKey: "language") ?? "ru"
+        // Until the person picks a language: Russian with the Russian interface, else the language of the Mac or detection.
+        language = defaults.string(forKey: "language")
+            ?? WhisperEngine.defaultLanguage(interface: Localization.current, preferredLanguages: Locale.preferredLanguages)
         prompt = defaults.string(forKey: "prompt") ?? ""
         autoTranscribe = defaults.object(forKey: "autoTranscribe") as? Bool ?? true
         showInspector = defaults.object(forKey: "showInspector") as? Bool ?? true
         previewAspect = PreviewAspect(rawValue: defaults.string(forKey: "previewAspect") ?? "") ?? .vertical
+        recentFiles = (defaults.stringArray(forKey: SessionKey.recent) ?? []).map { URL(fileURLWithPath: $0) }
+        lastExportURL = defaults.string(forKey: SessionKey.lastExport).map { URL(fileURLWithPath: $0) }
 
         modelStore.onInstalled = { [weak self] id in
             guard let self else { return }
             if self.modelStore.modelURL(for: self.modelID) == nil { self.modelID = id }
+            Accessibility.announce(L("Модель «%@» готова к работе", self.modelStore.displayName(for: id)))
         }
         ensureValidModelSelection()
 
@@ -263,22 +343,56 @@ final class AppModel: ObservableObject {
         SoundEffects.play(.delete)
     }
 
+    /// «Восстановить стандартные пресеты» asks first: the changes made to the built-in presets go.
+    func requestRestoreBuiltInPresets() {
+        confirmation = Confirmation(
+            title: L("Восстановить стандартные пресеты?"),
+            message: L("Стандартные пресеты вернутся к исходному виду, их изменения пропадут. Ваши собственные пресеты останутся как есть. Вернуть всё назад можно командой «Отменить» (⌘Z)"),
+            confirm: L("Восстановить")
+        ) { [weak self] in self?.restoreBuiltInPresets() }
+    }
+
+    /// The built-in presets get their original look back, found by identifier; missing ones come back. One undo step.
     func restoreBuiltInPresets() {
-        let existing = Set(presets.map(\.name))
-        let missing = SubtitlePreset.builtIn.filter { !existing.contains($0.name) }
-        presets.append(contentsOf: missing)
+        let restored = SubtitlePreset.restoringBuiltIn(in: presets)
+        guard restored != presets else { return }
+        registerPresetsUndo(presets, name: L("Восстановление пресетов"))
+        isRestoringUndo = true
+        presets = restored
+        isRestoringUndo = false
+        lastPresetUndo = nil
+    }
+
+    private func registerPresetsUndo(_ previous: [SubtitlePreset], name: String) {
+        guard let undoManager else { return }
+        undoManager.registerUndo(withTarget: self) { model in
+            MainActor.assumeIsolated { model.setPresetsFromUndo(previous, name: name) }
+        }
+        undoManager.setActionName(name)
+    }
+
+    private func setPresetsFromUndo(_ value: [SubtitlePreset], name: String) {
+        registerPresetsUndo(presets, name: name)
+        isRestoringUndo = true
+        presets = value
+        if !presets.contains(where: { $0.id == selectedPresetID }) { selectedPresetID = presets[0].id }
+        isRestoringUndo = false
+        lastPresetUndo = nil
     }
 
     func exportPresets(all: Bool) {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.json]
         panel.nameFieldStringValue = all ? L("Пресеты Subline.json") : L("Пресет %@.json", "\(preset.name)")
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        do {
-            try PresetStore.export(all ? presets : [preset], to: url)
-            SoundEffects.play(.send)
-        } catch {
-            errorMessage = L("Не удалось сохранить пресет: %@", "\(error.localizedDescription)")
+        let chosen = all ? presets : [preset]
+        Self.present(panel) { [weak self] panel in
+            guard let url = panel.url else { return }
+            do {
+                try PresetStore.export(chosen, to: url)
+                SoundEffects.play(.send)
+            } catch {
+                self?.problem = .saving(error, output: url)
+            }
         }
     }
 
@@ -286,24 +400,32 @@ final class AppModel: ObservableObject {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.json]
         panel.allowsMultipleSelection = true
-        guard panel.runModal() == .OK else { return }
+        Self.present(panel) { [weak self] panel in
+            self?.importPresets(from: (panel as? NSOpenPanel)?.urls ?? [])
+        }
+    }
+
+    private func importPresets(from urls: [URL]) {
         var imported: [SubtitlePreset] = []
-        for url in panel.urls {
+        var rejected: [String] = []
+        for url in urls {
             do {
                 imported += try PresetStore.importPresets(from: url)
             } catch {
-                errorMessage = L("Файл «%@» не похож на пресет Subline", "\(url.lastPathComponent)")
+                rejected.append(url.lastPathComponent)
             }
         }
-        guard !imported.isEmpty else { return }
         for var item in imported {
             item.name = uniquePresetName(item.name)
             presets.append(item)
         }
-        selectedPresetID = imported.last!.id
-        if let missing = imported.map(\.fontFamily).first(where: { !FontLibrary.isAvailable(family: $0) }) {
-            errorMessage = L("В пресете указан шрифт «%@», а на этом Mac его нет. Добавьте файлы шрифта через пункт «Добавить файлы шрифтов…» в меню «Стиль»", "\(missing)")
-        } else if errorMessage == nil {
+        if let last = imported.last { selectedPresetID = last.id }
+        if let name = rejected.first {
+            problem = Problem(title: L("Пресет не добавился"), message: L("Файл «%@» не похож на пресет Subline", name))
+        } else if let missing = imported.map(\.fontFamily).first(where: { !FontLibrary.isAvailable(family: $0) }) {
+            problem = Problem(title: L("Шрифта пресета нет на этом Mac"),
+                              message: L("В пресете указан шрифт «%@», а на этом Mac его нет. Добавьте файлы шрифта через пункт «Добавить файлы шрифтов…» в меню «Стиль»", "\(missing)"))
+        } else if !imported.isEmpty {
             SoundEffects.play(.mark)
         }
     }
@@ -382,10 +504,15 @@ final class AppModel: ObservableObject {
         panel.title = L("Выберите файлы шрифтов")
         panel.allowedContentTypes = [.font, UTType(filenameExtension: "otf"), UTType(filenameExtension: "ttf"), UTType(filenameExtension: "ttc")].compactMap { $0 }
         panel.allowsMultipleSelection = true
-        guard panel.runModal() == .OK else { return }
-        let families = fontStore.importFiles(panel.urls)
+        Self.present(panel) { [weak self] panel in
+            self?.addFonts((panel as? NSOpenPanel)?.urls ?? [])
+        }
+    }
+
+    private func addFonts(_ urls: [URL]) {
+        let families = fontStore.importFiles(urls)
         if let error = fontStore.lastError {
-            errorMessage = error
+            problem = Problem(title: L("Шрифт не добавился"), message: error)
             fontStore.lastError = nil
         }
         // A missing font of the current style has just appeared — or use the added family right away.
@@ -415,6 +542,9 @@ final class AppModel: ObservableObject {
     var isBusy: Bool { activity != nil }
     var isExporting: Bool { activity?.kind == .exporting }
 
+    /// How times are written for the open file: with hours for an hour or longer, everywhere alike.
+    var clockFormat: ClockFormat { ClockFormat(duration: media?.duration ?? 0) }
+
     /// Frame size used for layout: the video size, or the chosen aspect before a video is opened.
     var canvasSize: CGSize {
         if let media, media.hasVideo { return media.size }
@@ -427,16 +557,79 @@ final class AppModel: ObservableObject {
         panel.title = L("Выберите видео")
         panel.allowedContentTypes = [.movie, .video, .audiovisualContent, .audio, .data]
         panel.allowsMultipleSelection = false
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        openMedia(url)
+        Self.present(panel) { [weak self] panel in
+            if let url = panel.url { self?.requestOpen(url) }
+        }
     }
 
-    func openMedia(_ url: URL) {
-        guard !isExporting else { return }
+    /// Opening a file the person chose (the panel, a drop, Finder, Open Recent). Recognition that runs would stop, so
+    /// Subline asks first.
+    func requestOpen(_ url: URL) {
+        guard activity?.kind == .transcribing, let current = mediaURL else {
+            openMedia(url)
+            return
+        }
+        confirmation = Confirmation(
+            title: L("Остановить распознавание?"),
+            message: L("Сейчас распознаётся «%@». Если открыть «%@», распознавание остановится и его придётся начать заново", current.lastPathComponent, url.lastPathComponent),
+            confirm: L("Открыть другой файл")
+        ) { [weak self] in self?.openMedia(url) }
+    }
+
+    // MARK: - Recent files
+
+    /// The file goes to the top of File → Open Recent.
+    private func noteRecent(_ url: URL) {
+        let path = url.standardizedFileURL.path
+        var paths = recentFiles.map(\.path).filter { $0 != path }
+        paths.insert(path, at: 0)
+        paths = Array(paths.prefix(10))
+        recentFiles = paths.map { URL(fileURLWithPath: $0) }
+        defaults.set(paths, forKey: SessionKey.recent)
+    }
+
+    func openRecent(_ url: URL) {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            recentFiles.removeAll { $0 == url }
+            defaults.set(recentFiles.map(\.path), forKey: SessionKey.recent)
+            infoMessage = InfoMessage(title: L("Файл не найден"),
+                                      text: L("Файла «%@» больше нет на прежнем месте. Возможно, его переместили, переименовали или удалили", url.lastPathComponent))
+            return
+        }
+        requestOpen(url)
+    }
+
+    func clearRecent() {
+        recentFiles = []
+        defaults.removeObject(forKey: SessionKey.recent)
+    }
+
+    /// Names for Open Recent: files with the same name get their folder.
+    func recentTitle(_ url: URL) -> String {
+        let name = url.lastPathComponent
+        guard recentFiles.filter({ $0.lastPathComponent == name }).count > 1 else { return name }
+        return "\(name) (\(url.deletingLastPathComponent().lastPathComponent))"
+    }
+
+    /// Opens a video or an audio file. Its subtitles and edits come back from the last time it was open. `restoring`
+    /// is the playhead of a session that comes back at launch: then the file opens only to show the saved work.
+    func openMedia(_ url: URL, restoring: Double? = nil) {
+        guard !isExporting else {
+            infoMessage = InfoMessage(title: L("Идёт экспорт"),
+                                      text: L("Другое видео можно открыть, когда экспорт закончится или будет остановлен"))
+            return
+        }
+        // The edits of the open video are written before it goes.
+        flushPendingCacheSave()
+        finishTextEditing()
         workTask?.cancel()
         frameTask?.cancel()
+        buildJob?.cancel()
+        buildJob = nil
+        cacheKey = nil
         player.unload()
         exportNotice = nil
+        restoreNotice = nil
         mediaURL = url
         media = nil
         frameImage = nil
@@ -457,13 +650,28 @@ final class AppModel: ObservableObject {
                 guard self.mediaURL == url else { return }
                 self.media = info
                 self.player.load(info)
-                if info.hasVideo {
-                    let time = min(max(0, info.duration * 0.1), 3)
+                // The saved work is found by the content of the file: both ends are read off the main thread.
+                let (key, cached) = await Task.detached(priority: .userInitiated) { () -> (String?, TranscriptCache.Entry?) in
+                    let key = TranscriptCache.key(for: url)
+                    return (key, TranscriptCache.load(key: key, url: url))
+                }.value
+                guard self.mediaURL == url else { return }
+                self.cacheKey = key
+                if info.hasVideo || restoring != nil {
+                    let start = restoring.map { min(max(0, $0), max(0, info.duration - 0.05)) }
+                    let time = start ?? min(max(0, info.duration * 0.1), 3)
                     self.player.seek(to: time)
-                    await self.loadFrame(at: time)
+                    if info.hasVideo { await self.loadFrame(at: time) }
                 }
+                guard self.mediaURL == url else { return }
                 self.activity = nil
-                if let cached = TranscriptCache.load(for: url) {
+                self.rememberSession()
+                self.noteRecent(url)
+                if let cached {
+                    // The preset first: with the cues of another preset the subtitles would be cut again.
+                    if let id = cached.presetID, id != self.selectedPresetID, self.presets.contains(where: { $0.id == id }) {
+                        self.selectedPresetID = id
+                    }
                     self.transcript = cached.transcript
                     self.transcriptFromCache = true
                     if cached.layoutKey == self.preset.layoutKey || cached.edited {
@@ -474,10 +682,13 @@ final class AppModel: ObservableObject {
                     } else {
                         self.rebuildCues()
                     }
+                    if restoring != nil { self.showRestoreNotice(url.lastPathComponent) }
                     return
                 }
+                // A session comes back only to show saved work: nothing starts by itself.
+                guard restoring == nil else { return }
                 guard info.hasAudio else {
-                    self.errorMessage = MediaError.noAudio.localizedDescription
+                    self.problem = Problem(title: L("В файле нет звука"), message: MediaError.noAudio.localizedDescription)
                     return
                 }
                 if self.autoTranscribe {
@@ -491,7 +702,7 @@ final class AppModel: ObservableObject {
                 guard self.mediaURL == url else { return }
                 self.activity = nil
                 if !Self.isCancellation(error) {
-                    self.errorMessage = error.localizedDescription
+                    self.problem = .opening(error, file: url)
                     self.mediaURL = nil
                 }
             }
@@ -500,8 +711,15 @@ final class AppModel: ObservableObject {
 
     func closeMedia() {
         guard !isExporting else { return }
+        flushPendingCacheSave()
+        finishTextEditing()
+        // Closed on purpose: the next launch starts empty. The work stays and comes back with the video.
+        forgetSession()
         workTask?.cancel()
         frameTask?.cancel()
+        buildJob?.cancel()
+        buildJob = nil
+        cacheKey = nil
         player.unload()
         mediaURL = nil
         media = nil
@@ -513,6 +731,51 @@ final class AppModel: ObservableObject {
         cuesEdited = false
         activity = nil
         exportNotice = nil
+        restoreNotice = nil
+    }
+
+    // MARK: - Session
+
+    /// Remembers the open video and the playhead: the next launch opens it again with its subtitles.
+    func rememberSession() {
+        guard let mediaURL, media != nil else { return }
+        defaults.set(mediaURL.path, forKey: SessionKey.media)
+        defaults.set(player.currentTime, forKey: SessionKey.time)
+    }
+
+    func forgetSession() {
+        defaults.removeObject(forKey: SessionKey.media)
+        defaults.removeObject(forKey: SessionKey.time)
+    }
+
+    /// At launch: the video of the last session opens again where it was left, when it still exists and has saved
+    /// subtitles. Nothing is recognized by itself.
+    func restoreLastSession() {
+        guard mediaURL == nil, let path = defaults.string(forKey: SessionKey.media) else { return }
+        let url = URL(fileURLWithPath: path)
+        let time = defaults.double(forKey: SessionKey.time)
+        // The saved work is looked up by the content of the file, off the main thread (a network disk can be slow).
+        Task { [weak self] in
+            let saved = await Task.detached(priority: .userInitiated) {
+                FileManager.default.fileExists(atPath: path) && TranscriptCache.load(for: url) != nil
+            }.value
+            guard let self, self.mediaURL == nil else { return }
+            guard saved else {
+                self.forgetSession()
+                return
+            }
+            self.openMedia(url, restoring: time)
+        }
+    }
+
+    private func showRestoreNotice(_ name: String) {
+        restoreNotice = name
+        restoreNoticeTask?.cancel()
+        restoreNoticeTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.restoreNotice = nil
+        }
     }
 
     // MARK: - Playhead
@@ -551,7 +814,7 @@ final class AppModel: ObservableObject {
         return cues.first { $0.id == currentCueID }
     }
 
-    private func handle(_ command: KeyboardController.Command) -> Bool {
+    func handle(_ command: KeyboardController.Command) -> Bool {
         guard hasMedia || command == .escape else { return false }
         switch command {
         case .togglePlay: player.togglePlay()
@@ -562,6 +825,12 @@ final class AppModel: ObservableObject {
         case .escape:
             guard scope != .all || !selectedCueIDs.isEmpty || wordSelection != nil else { return false }
             clearSelection()
+        case .delete:
+            guard !deletableCueIDs.isEmpty, !isBusy else { return false }
+            deleteCues(deletableCueIDs)
+        case .selectAll:
+            guard !cues.isEmpty else { return false }
+            selectAllCues()
         }
         return true
     }
@@ -627,10 +896,26 @@ final class AppModel: ObservableObject {
 
     // MARK: - Transcription
 
+    var canTranscribe: Bool { media != nil && !isBusy && !updateInProgress }
+
+    /// «Распознать речь» from the button and the menu: over subtitles edited by hand Subline asks first.
+    func requestTranscription() {
+        guard canTranscribe else { return }
+        guard cuesEdited || !groups.isEmpty else {
+            startTranscription()
+            return
+        }
+        confirmation = Confirmation(
+            title: L("Распознать речь заново?"),
+            message: L("Субтитры правились вручную. После нового распознавания они нарежутся заново, правки и группы пропадут. Вернуть их можно командой «Отменить» (⌘Z)"),
+            confirm: L("Распознать заново")
+        ) { [weak self] in self?.startTranscription() }
+    }
+
     func startTranscription() {
         guard let url = mediaURL, let info = media, !isBusy, !updateInProgress else { return }
         guard info.hasAudio else {
-            errorMessage = MediaError.noAudio.localizedDescription
+            problem = Problem(title: L("В файле нет звука"), message: MediaError.noAudio.localizedDescription)
             return
         }
         guard let modelURL = selectedModelURL else {
@@ -644,15 +929,18 @@ final class AppModel: ObservableObject {
 
         let options = WhisperOptions(modelPath: modelURL.path, language: language, prompt: prompt)
         let modelID = self.modelID
+        let language = self.language
         workTask = Task { [weak self] in
             let flag = CancelFlag()
-            let job = Task.detached(priority: .userInitiated) { () throws -> (segments: [TranscriptSegment], language: String) in
+            let job = Task.detached(priority: .userInitiated) { () throws -> (segments: [TranscriptSegment], language: String, silent: Bool) in
                 let work = AppPaths.makeTempDir("transcribe")
                 defer { try? FileManager.default.removeItem(at: work) }
                 let samples = try await FFmpeg.extractAudioSamples(from: url, workDir: work, duration: info.duration) { p in
                     Task { @MainActor in self?.updateActivity(progress: p * 0.04) }
                 }
                 if flag.isCancelled || Task.isCancelled { throw WhisperError.cancelled }
+                // Told apart later when nothing is recognized: silence, or speech the model did not catch.
+                let silent = AudioLevel.isSilent(samples)
                 if WhisperEngine.isWarmingUp {
                     await MainActor.run {
                         self?.updateActivity(title: L("Готовлю видеокарту (только в первый раз)"), progress: nil)
@@ -663,9 +951,10 @@ final class AppModel: ObservableObject {
                 }
                 WhisperEngine.warmUp()
                 await MainActor.run { self?.updateActivity(title: L("Распознаю речь"), progress: 0.04) }
-                return try WhisperEngine.transcribe(samples: samples, options: options, progress: { p in
+                let result = try WhisperEngine.transcribe(samples: samples, options: options, progress: { p in
                     Task { @MainActor in self?.updateActivity(progress: 0.04 + 0.96 * p) }
                 }, isCancelled: { flag.isCancelled })
+                return (result.segments, result.language, silent)
             }
             do {
                 let result = try await withTaskCancellationHandler {
@@ -683,9 +972,12 @@ final class AppModel: ObservableObject {
                 self.menuBarIcon.finish(transcript.segments.isEmpty ? .failure : .success)
                 self.activity = nil
                 if transcript.segments.isEmpty {
-                    self.errorMessage = L("Речь не распознана. Проверьте язык распознавания или попробуйте другую модель")
+                    self.problem = Self.nothingRecognized(silent: result.silent, language: language)
                 } else {
                     SoundEffects.play(.success)
+                    // A long transcript is still being cut: its count is not known yet.
+                    Accessibility.announce(self.isBuildingCues ? L("Распознавание закончено")
+                                                               : L("Распознавание закончено. Субтитров: %@", "\(self.cues.count)"))
                 }
             } catch {
                 guard let self else { return }
@@ -694,15 +986,52 @@ final class AppModel: ObservableObject {
                     self.activity = nil
                 }
                 if !Self.isCancellation(error) {
-                    self.errorMessage = error.localizedDescription
+                    self.problem = .recognizing(error, file: url)
                 }
             }
         }
     }
 
+    /// Nothing was recognized: the sound is silent, or there is sound the model found no words in (another language,
+    /// music, noise).
+    static func nothingRecognized(silent: Bool, language: String) -> Problem {
+        if silent {
+            return Problem(title: L("Речи не слышно"),
+                           message: L("Звук в файле очень тихий или его нет совсем, распознавать нечего. Проверьте, тот ли файл открыт"))
+        }
+        if language == "auto" {
+            return Problem(title: L("Речь не распознана"),
+                           message: L("Звук есть, но слов модель не нашла. Возможно, в файле музыка или шум без речи. Можно попробовать другую модель"))
+        }
+        let name = WhisperEngine.languages.first { $0.code == language }?.name ?? language
+        return Problem(title: L("Речь не распознана"),
+                       message: L("Звук есть, но слов модель не нашла. Сейчас выбран язык «%@», возможно, речь на другом. Выберите язык речи или «Определить автоматически» и распознайте заново", name))
+    }
+
     func cancelActivity() {
         workTask?.cancel()
         activity = nil
+    }
+
+    /// Before the window closes or Subline quits: recognition or export would be lost, so Subline asks whether to stop
+    /// it. True when closing may go on (nothing runs, or the person chose to stop; the work is then stopped).
+    func confirmStopForClosing() -> Bool {
+        guard let kind = activity?.kind, kind != .opening else { return true }
+        let alert = NSAlert()
+        if kind == .exporting {
+            alert.messageText = L("Идёт экспорт видео")
+            alert.informativeText = L("Если закрыть Subline сейчас, видео не сохранится. Субтитры и правки останутся, экспорт можно будет повторить")
+            alert.addButton(withTitle: L("Продолжить экспорт"))
+        } else {
+            alert.messageText = L("Идёт распознавание речи")
+            alert.informativeText = L("Если закрыть Subline сейчас, распознавание прервётся и его придётся начать заново")
+            alert.addButton(withTitle: L("Продолжить распознавание"))
+        }
+        let stop = alert.addButton(withTitle: L("Остановить и закрыть"))
+        stop.hasDestructiveAction = true
+        guard alert.runModal() == .alertSecondButtonReturn else { return false }
+        cancelActivity()
+        return true
     }
 
     private func updateActivity(title: String? = nil, progress: Double?) {
@@ -726,17 +1055,48 @@ final class AppModel: ObservableObject {
         transcript != nil && cuesEdited && preset.layoutKey != cuesLayoutKey
     }
 
-    func rebuildCues() {
+    /// Cuts the transcript into subtitles by the current preset. A long transcript is cut in the background (a newer
+    /// cut cancels it), so sliders of the style stay smooth on an hour of video. `onlyIfUnedited`: the cut follows a
+    /// change of the style and is dropped when the subtitles were edited by hand meanwhile.
+    func rebuildCues(onlyIfUnedited: Bool = false) {
         guard let transcript else { return }
-        if cuesEdited || !groups.isEmpty { registerCuesUndo(L("Пересборка субтитров")) }
+        buildJob?.cancel()
+        buildJob = nil
+        let words = transcript.words
         let style = LayoutStyle(preset: preset, canvas: canvasSize)
+        let key = preset.layoutKey
+        let duration = media?.duration
+        guard words.count >= Self.backgroundBuildWords else {
+            applyBuiltCues(CueBuilder.build(words: words, style: style, mediaDuration: duration), layoutKey: key)
+            return
+        }
+        let revision = transcriptRevision
+        let job = Task.detached(priority: .userInitiated) { () -> [Cue]? in
+            let cues = CueBuilder.build(words: words, style: style, mediaDuration: duration, isCancelled: { Task.isCancelled })
+            return Task.isCancelled ? nil : cues
+        }
+        buildJob = job
+        Task { [weak self] in
+            guard let cues = await job.value, let self, self.buildJob == job else { return }
+            self.buildJob = nil
+            guard self.transcriptRevision == revision, !(onlyIfUnedited && self.cuesEdited) else { return }
+            self.applyBuiltCues(cues, layoutKey: key)
+        }
+    }
+
+    /// A cut of subtitles is in place: edited subtitles and groups give way (one undo step brings them back).
+    private func applyBuiltCues(_ built: [Cue], layoutKey: String) {
+        if cuesEdited || !groups.isEmpty { registerCuesUndo(L("Пересборка субтитров")) }
         groups = []
         clearSelection()
-        cues = CueBuilder.build(words: transcript.words, style: style, mediaDuration: media?.duration)
-        cuesLayoutKey = preset.layoutKey
+        cues = built
+        cuesLayoutKey = layoutKey
         cuesEdited = false
         scheduleCacheSave()
     }
+
+    /// Subtitles are being cut in the background.
+    var isBuildingCues: Bool { buildJob != nil }
 
     private func styleChanged() {
         guard transcript != nil, !cuesEdited, preset.layoutKey != cuesLayoutKey else { return }
@@ -744,15 +1104,158 @@ final class AppModel: ObservableObject {
         rebuildTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 60_000_000)
             guard !Task.isCancelled, let self else { return }
-            if !self.cuesEdited, self.preset.layoutKey != self.cuesLayoutKey { self.rebuildCues() }
+            if !self.cuesEdited, self.preset.layoutKey != self.cuesLayoutKey { self.rebuildCues(onlyIfUnedited: true) }
         }
     }
 
+    /// New text for a subtitle. A one-line style gets no line breaks: they become spaces.
     func updateCueText(_ id: UUID, _ text: String) {
-        guard let index = cues.firstIndex(where: { $0.id == id }), cues[index].text != text else { return }
-        cues[index].setText(text)
+        guard let index = cues.firstIndex(where: { $0.id == id }) else { return }
+        let clean = CueText.normalizedInput(text, allowsLineBreaks: allowsLineBreaks(in: cues[index]))
+        guard cues[index].text != clean else { return }
+        cues[index].setText(clean)
         if wordSelection?.cueID == id { wordSelection = nil }
         markEdited()
+    }
+
+    /// The style of the subtitle allows more than one line, so a line break typed by hand can stay.
+    func allowsLineBreaks(in cue: Cue) -> Bool {
+        renderer.style(for: cue).maxLines > 1
+    }
+
+    // MARK: - Typing in the list
+
+    /// Typing starts in the text of a subtitle: the video stops at its start, so it stays on screen.
+    func beginTextEditing(_ cue: Cue) {
+        editingCueID = cue.id
+        textUndoCueID = nil
+        select(cue)
+    }
+
+    func endTextEditing(_ id: UUID) {
+        if editingCueID == id { editingCueID = nil }
+        textUndoCueID = nil
+    }
+
+    /// Text typed in the list. One undo step per round of typing: ⌘Z after it brings back the text from before.
+    func editCueText(_ id: UUID, _ text: String) {
+        if textUndoCueID != id {
+            registerCuesUndo(L("Правка текста"))
+            textUndoCueID = id
+        }
+        updateCueText(id, text)
+    }
+
+    /// Ends typing in the window (the text stays): Space and the arrows go back to the player.
+    func finishTextEditing() {
+        for window in NSApp.windows where window.firstResponder is NSText && window.attachedSheet == nil {
+            window.makeFirstResponder(nil)
+        }
+    }
+
+    /// The subtitle that commands from the menu and the keyboard act on: the one being typed in, the only selected
+    /// one, or the one under the playhead.
+    var targetCueID: UUID? {
+        if let editingCueID, cues.contains(where: { $0.id == editingCueID }) { return editingCueID }
+        if selectedCueIDs.count == 1, let id = selectedCueIDs.first { return id }
+        return currentCueID
+    }
+
+    func canMoveFirstWordToPrevious(_ id: UUID?) -> Bool {
+        guard let id, let index = cues.firstIndex(where: { $0.id == id }) else { return false }
+        return index > 0 && !CueText.words(cues[index].text).isEmpty
+    }
+
+    func canMoveLastWordToNext(_ id: UUID?) -> Bool {
+        guard let id, let index = cues.firstIndex(where: { $0.id == id }) else { return false }
+        return index + 1 < cues.count && !CueText.words(cues[index].text).isEmpty
+    }
+
+    func canSplit(_ id: UUID?) -> Bool {
+        guard let id, let cue = cues.first(where: { $0.id == id }) else { return false }
+        return CueText.words(cue.text).count > 1
+    }
+
+    /// The first word of the subtitle goes to the end of the previous one.
+    func moveFirstWordToPrevious(_ id: UUID) {
+        guard canMoveFirstWordToPrevious(id), let index = cues.firstIndex(where: { $0.id == id }) else { return }
+        registerCuesUndo(L("Перенос слова"))
+        let neighbour = cues[index - 1].id
+        var updated = cues
+        CueEditor.moveFirstWordToPrevious(&updated, at: index, words: transcript?.words ?? [])
+        applyEditedCues(updated, touching: [id, neighbour])
+    }
+
+    /// The last word of the subtitle goes to the start of the next one.
+    func moveLastWordToNext(_ id: UUID) {
+        guard canMoveLastWordToNext(id), let index = cues.firstIndex(where: { $0.id == id }) else { return }
+        registerCuesUndo(L("Перенос слова"))
+        let neighbour = cues[index + 1].id
+        var updated = cues
+        CueEditor.moveLastWordToNext(&updated, at: index, words: transcript?.words ?? [])
+        applyEditedCues(updated, touching: [id, neighbour])
+    }
+
+    /// Splits a subtitle in two: at the text caret when the text is being typed in (or was a moment ago), else at the
+    /// playhead when it is inside the subtitle, else where both halves fit the lines of the style best.
+    func splitCue(_ id: UUID) {
+        guard canSplit(id), let index = cues.firstIndex(where: { $0.id == id }) else { return }
+        let cue = cues[index]
+        let count = CueText.words(cue.text).count
+        let words = transcript?.words ?? []
+        var wordIndex: Int?
+        var time: Double?
+        if let caret = textCaret, caret.cueID == id, caret.text == cue.text,
+           editingCueID == id || Date().timeIntervalSince(caret.time) < 3 {
+            let k = CueText.wordIndex(atUTF16Offset: caret.offset, in: cue.text)
+            if k > 0 && k < count { wordIndex = k }
+        }
+        let playhead = player.currentTime
+        if wordIndex == nil, playhead > cue.start + 0.1, playhead < cue.end - 0.1,
+           let k = CueEditor.wordIndex(at: playhead, in: cue, words: words) {
+            wordIndex = k
+            time = playhead
+        }
+        guard let k = wordIndex ?? renderer.splitPoint(cue) else { return }
+        split(index, beforeWord: k, time: time)
+    }
+
+    /// The subtitle does not fit the lines of its style: it becomes two that do.
+    func splitToFit(_ id: UUID) {
+        guard let index = cues.firstIndex(where: { $0.id == id }), let k = renderer.splitPoint(cues[index]) else { return }
+        split(index, beforeWord: k, time: nil)
+    }
+
+    private func split(_ index: Int, beforeWord k: Int, time: Double?) {
+        registerCuesUndo(L("Разделение субтитра"))
+        let id = cues[index].id
+        var updated = cues
+        guard CueEditor.split(&updated, at: index, beforeWord: k, time: time, words: transcript?.words ?? []) else { return }
+        applyEditedCues(updated, touching: [id])
+    }
+
+    /// Puts the edited list in place. Word selections of the changed subtitles go (their word numbers moved), and the
+    /// text being typed ends when its subtitle is gone.
+    private func applyEditedCues(_ updated: [Cue], touching ids: Set<UUID>) {
+        if let selection = wordSelection, ids.contains(selection.cueID) {
+            wordSelection = nil
+            if scope == .words { scope = .cues }
+        }
+        cues = updated
+        selectedCueIDs = selectedCueIDs.filter { id in updated.contains { $0.id == id } }
+        if let editingCueID, !updated.contains(where: { $0.id == editingCueID }) { finishTextEditing() }
+        markEdited()
+    }
+
+    /// How many lines the subtitle takes against the lines of its style (kept until the subtitle or the style changes).
+    func lineFit(for cue: Cue) -> LineFit {
+        let renderer = self.renderer
+        if fitCache?.renderer !== renderer { fitCache = (renderer, [:]) }
+        let hash = cue.hashValue
+        if let cached = fitCache?.fits[cue.id], cached.hash == hash { return cached.fit }
+        let fit = renderer.fit(cue)
+        fitCache?.fits[cue.id] = (hash, fit)
+        return fit
     }
 
     func updateCueTiming(_ id: UUID, start: Double? = nil, end: Double? = nil) {
@@ -768,25 +1271,58 @@ final class AppModel: ObservableObject {
     }
 
     func deleteCue(_ id: UUID) {
-        registerCuesUndo(L("Удаление субтитра"))
-        cues.removeAll { $0.id == id }
-        markEdited()
+        deleteCues([id])
+    }
+
+    /// The subtitles ⌫ and «Удалить» remove: the selected ones, else the one commands act on.
+    var deletableCueIDs: [UUID] {
+        if !selectedCueIDs.isEmpty { return cues.map(\.id).filter(selectedCueIDs.contains) }
+        return targetCueID.map { [$0] } ?? []
+    }
+
+    /// Removes subtitles in one undo step.
+    func deleteCues(_ ids: [UUID]) {
+        let removed = Set(ids)
+        guard !removed.isEmpty, cues.contains(where: { removed.contains($0.id) }) else { return }
+        registerCuesUndo(removed.count > 1 ? L("Удаление субтитров") : L("Удаление субтитра"))
+        applyEditedCues(cues.filter { !removed.contains($0.id) }, touching: removed)
         SoundEffects.play(.delete)
+    }
+
+    /// Every subtitle selected (⌘A outside the text, «Выбрать все субтитры»).
+    func selectAllCues() {
+        guard !cues.isEmpty else { return }
+        finishTextEditing()
+        wordSelection = nil
+        selectedCueIDs = Set(cues.map(\.id))
+        selectionAnchorID = cues.first?.id
+        scope = .cues
+    }
+
+    /// Tab in the text of a subtitle: typing goes on in the next one (⇧Tab: the previous one). Past the last subtitle
+    /// typing ends.
+    func editText(after id: UUID, forward: Bool) {
+        guard let index = cues.firstIndex(where: { $0.id == id }) else { return }
+        let target = forward ? index + 1 : index - 1
+        guard cues.indices.contains(target) else {
+            finishTextEditing()
+            return
+        }
+        textFocusRequest = cues[target].id
+    }
+
+    func canMergeWithNext(_ id: UUID?) -> Bool {
+        guard let id, let index = cues.firstIndex(where: { $0.id == id }) else { return false }
+        return index + 1 < cues.count
     }
 
     func mergeWithNext(_ id: UUID) {
         guard let index = cues.firstIndex(where: { $0.id == id }), index + 1 < cues.count else { return }
         registerCuesUndo(L("Объединение субтитров"))
-        let next = cues.remove(at: index + 1)
-        let offset = CueText.words(cues[index].text).count
-        if let styles = next.wordStyles {
-            var merged = cues[index].wordStyles ?? [:]
-            for (wordIndex, style) in styles { merged[wordIndex + offset] = style }
-            cues[index].wordStyles = merged
-        }
-        cues[index].text += " " + next.text
-        cues[index].end = next.end
-        markEdited()
+        let next = cues[index + 1].id
+        var updated = cues
+        CueEditor.mergeWithNext(&updated, at: index)
+        applyEditedCues(updated, touching: [id, next])
     }
 
     func insertCue(after id: UUID) {
@@ -801,27 +1337,10 @@ final class AppModel: ObservableObject {
         select(cue)
     }
 
-    /// Splits the current subtitle at the playhead: words are divided proportionally to the time.
+    /// ⌘B: splits the subtitle being typed in (at the caret) or the one under the playhead (at the playhead).
     func splitCurrentCue() {
-        guard let cue = currentCue, let index = cues.firstIndex(where: { $0.id == cue.id }) else { return }
-        let time = player.currentTime
-        guard time > cue.start + 0.1, time < cue.end - 0.1 else { return }
-        let words = CueText.words(cue.text)
-        guard words.count > 1 else { return }
-        let fraction = (time - cue.start) / (cue.end - cue.start)
-        let splitAt = min(max(1, Int((Double(words.count) * fraction).rounded())), words.count - 1)
-        registerCuesUndo(L("Разделение субтитра"))
-        var first: [Int: StyleOverride] = [:]
-        var second: [Int: StyleOverride] = [:]
-        for (wordIndex, style) in cue.wordStyles ?? [:] {
-            if wordIndex < splitAt { first[wordIndex] = style } else { second[wordIndex - splitAt] = style }
-        }
-        cues[index].text = words[..<splitAt].joined(separator: " ")
-        cues[index].wordStyles = first.isEmpty ? nil : first
-        cues[index].end = time
-        cues.insert(Cue(start: time, end: cue.end, text: words[splitAt...].joined(separator: " "),
-                        groupID: cue.groupID, style: cue.style, wordStyles: second.isEmpty ? nil : second), at: index + 1)
-        markEdited()
+        guard let id = targetCueID else { return }
+        splitCue(id)
     }
 
     func markEdited() {
@@ -829,18 +1348,39 @@ final class AppModel: ObservableObject {
         scheduleCacheSave()
     }
 
+    /// Subtitles, edits, groups and the preset of the open video are written to disk shortly after every change
+    /// (and right away before the video closes or Subline quits), so nothing has to be saved by hand.
     func scheduleCacheSave() {
         guard let url = mediaURL, let transcript else { return }
         pendingCacheSave = (TranscriptCache.Entry(transcript: transcript, cues: cues, edited: cuesEdited, layoutKey: cuesLayoutKey,
-                                                  modelID: modelID, groups: groups), url)
+                                                  modelID: modelID, groups: groups, presetID: selectedPresetID), url, cacheKey)
         cacheSaveTask?.cancel()
         cacheSaveTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 800_000_000)
             guard !Task.isCancelled, let self, let pending = self.pendingCacheSave else { return }
             self.pendingCacheSave = nil
-            await Task.detached(priority: .utility) { TranscriptCache.save(pending.entry, for: pending.url) }.value
+            Self.cacheQueue.async { Self.write(pending) }
         }
     }
+
+    private nonisolated static func write(_ pending: (entry: TranscriptCache.Entry, url: URL, key: String?)) {
+        if let key = pending.key {
+            TranscriptCache.save(pending.entry, key: key, url: pending.url)
+        } else {
+            TranscriptCache.save(pending.entry, for: pending.url)
+        }
+    }
+
+    /// ⌘S: the work is written at once (it is written by itself anyway), and the "Saved" mark lights up.
+    func saveNow() {
+        scheduleCacheSave()
+        flushPendingSaves()
+        savedFlash += 1
+        Accessibility.announce(L("Правки сохранены"))
+    }
+
+    /// One writer for the saved subtitles: a newer save never lands before an older one.
+    private static let cacheQueue = DispatchQueue(label: "Subline.TranscriptCache", qos: .utility)
 
     /// Writes changes that are still waiting for the delayed save (before quitting or restarting).
     func flushPendingSaves() {
@@ -849,10 +1389,17 @@ final class AppModel: ObservableObject {
             presetSaveTask = nil
             PresetStore.save(presets)
         }
+        flushPendingCacheSave()
+        rememberSession()
+    }
+
+    /// Writes the subtitles of the open video now if a save is still waiting (after a save already under way).
+    func flushPendingCacheSave() {
         cacheSaveTask?.cancel()
-        if let pending = pendingCacheSave {
-            pendingCacheSave = nil
-            TranscriptCache.save(pending.entry, for: pending.url)
+        let pending = pendingCacheSave
+        pendingCacheSave = nil
+        Self.cacheQueue.sync {
+            if let pending { Self.write(pending) }
         }
     }
 
@@ -922,29 +1469,70 @@ final class AppModel: ObservableObject {
 
     // MARK: - Export
 
+    /// The format of the Export button: a video for a video, SRT for an audio file.
+    var defaultExportFormat: ExportFormat {
+        media == nil || hasVideo ? .mp4H264 : .srt
+    }
+
+    /// Why the subtitles cannot be exported right now, in words for the person (nil when they can). `format` nil asks
+    /// about the Export button.
+    func exportBlocker(for format: ExportFormat? = nil) -> String? {
+        if updateInProgress {
+            return L("Ставится обновление Subline, скоро приложение перезапустится и экспорт снова станет доступен")
+        }
+        guard mediaURL != nil else { return L("Сначала откройте видео, затем распознайте речь") }
+        switch activity?.kind {
+        case .opening: return L("Видео ещё открывается")
+        case .transcribing: return L("Идёт распознавание речи. Экспорт будет доступен, когда оно закончится")
+        case .exporting: return L("Экспорт уже идёт. Его ход виден над видео")
+        case nil: break
+        }
+        guard let media else { return L("Видео ещё открывается") }
+        if cues.isEmpty {
+            return transcript == nil ? L("Субтитров пока нет. Сначала распознайте речь")
+                                     : L("Субтитров нет, экспортировать нечего. Речь можно распознать заново")
+        }
+        if (format ?? defaultExportFormat).needsVideo && !media.hasVideo {
+            return MediaError.noVideo.localizedDescription
+        }
+        return nil
+    }
+
     func export(_ format: ExportFormat) {
-        guard let info = media, let url = mediaURL, !isBusy, !updateInProgress else { return }
-        guard !cues.isEmpty else {
-            errorMessage = L("Субтитров пока нет. Сначала распознайте речь")
+        if let reason = exportBlocker(for: format) {
+            infoMessage = InfoMessage(title: L("Экспорт пока недоступен"), text: reason)
             return
         }
-        if format.needsVideo && !info.hasVideo {
-            errorMessage = MediaError.noVideo.localizedDescription
-            return
-        }
+        guard let url = mediaURL else { return }
+        // Typing ends first: the text in the field is what gets exported.
+        finishTextEditing()
         player.pause()
         let panel = NSSavePanel()
         panel.title = format.title
         panel.directoryURL = url.deletingLastPathComponent()
         panel.nameFieldStringValue = url.deletingPathExtension().lastPathComponent + format.fileSuffix + "." + format.fileExtension
         if let type = UTType(filenameExtension: format.fileExtension) { panel.allowedContentTypes = [type] }
-        guard panel.runModal() == .OK, let output = panel.url else { return }
-        export(format, to: output)
+        Self.present(panel) { [weak self] panel in
+            guard let self, let output = panel.url else { return }
+            if output.standardizedFileURL.resolvingSymlinksInPath() == url.standardizedFileURL.resolvingSymlinksInPath() {
+                self.problem = Problem(title: L("Выберите другое имя"),
+                                       message: L("Это файл исходного видео. Сохраните результат под другим именем, иначе исходник пропадёт"))
+                return
+            }
+            self.export(format, to: output)
+        }
     }
 
     /// Export without the save panel (used by automated checks).
     func exportForTesting(_ format: ExportFormat, to output: URL) {
         export(format, to: output)
+    }
+
+    /// A recognized transcript without running Whisper (tests): the subtitles are cut from it as after recognition.
+    func useTranscriptForTesting(_ transcript: Transcript) {
+        self.transcript = transcript
+        transcriptFromCache = false
+        rebuildCues()
     }
 
     /// A long job shown in the window without running it (test hooks, for pictures of the interface).
@@ -953,17 +1541,37 @@ final class AppModel: ObservableObject {
     }
 
     private func export(_ format: ExportFormat, to output: URL) {
-        guard let info = media else { return }
+        guard let info = media else {
+            problem = Problem(title: L("Экспорт не начался"), message: L("Видео закрылось, экспортировать нечего"))
+            return
+        }
         let preset = self.preset
         let cues = self.cues
         let groups = self.groups
+        let source = mediaURL
         if format == .srt {
-            do {
-                try Exporter.srt(cues: cues, renderer: renderer).write(to: output, atomically: true, encoding: .utf8)
-                showNotice(output)
-                SoundEffects.play(.send)
-            } catch {
-                errorMessage = L("Не удалось сохранить SRT: %@", "\(error.localizedDescription)")
+            // Written in the background: an hour of subtitles takes a noticeable moment to lay out.
+            let canvas = canvasSize
+            exportNotice = nil
+            srtTask?.cancel()
+            srtTask = Task { [weak self] in
+                let result = await Task.detached(priority: .userInitiated) { () -> Error? in
+                    do {
+                        let renderer = CueRenderer(preset: preset, groups: groups, canvas: canvas)
+                        try Exporter.srt(cues: cues, renderer: renderer).write(to: output, atomically: true, encoding: .utf8)
+                        return nil
+                    } catch {
+                        return error
+                    }
+                }.value
+                guard let self, !Task.isCancelled else { return }
+                self.srtTask = nil
+                if let error = result {
+                    self.problem = .saving(error, output: output)
+                } else {
+                    self.showNotice(output)
+                    SoundEffects.play(.send)
+                }
             }
             return
         }
@@ -994,20 +1602,57 @@ final class AppModel: ObservableObject {
                 if !Self.isCancellation(error) { self.menuBarIcon.finish(.failure) }
                 self.activity = nil
                 if !Self.isCancellation(error) {
-                    self.errorMessage = error.localizedDescription
+                    self.problem = .exporting(error, output: output, source: source)
                 }
             }
         }
     }
 
+    /// The result stays over the video until it is closed or another job starts; File → Show Last Export finds it later.
     private func showNotice(_ url: URL) {
         exportNotice = ExportNotice(url: url)
-        noticeTask?.cancel()
-        noticeTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 12_000_000_000)
-            guard !Task.isCancelled else { return }
-            self?.exportNotice = nil
+        lastExportURL = url
+        defaults.set(url.path, forKey: SessionKey.lastExport)
+        Accessibility.announce(L("Экспорт готов: %@", url.lastPathComponent))
+    }
+
+    /// File → Show Last Export: the file in Finder.
+    func revealLastExport() {
+        guard let url = lastExportURL else { return }
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            infoMessage = InfoMessage(title: L("Файл не найден"),
+                                      text: L("Файла «%@» больше нет на прежнем месте. Возможно, его переместили, переименовали или удалили", url.lastPathComponent))
+            return
         }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    // MARK: - Panels
+
+    /// Shows an open or save panel as a sheet of the window it belongs to (or of an open sheet); alone when there is
+    /// no window yet. `done` runs after OK.
+    static func present(_ panel: NSSavePanel, done: @escaping (NSSavePanel) -> Void) {
+        // A sheet in front (models, fonts) takes the panel; otherwise the main window, even when Settings is in front.
+        let key = NSApp.keyWindow
+        let main = NSApp.windows.first { $0.identifier?.rawValue == "main" && $0.isVisible }
+        if let window = (key?.isSheet == true ? key : nil) ?? main ?? key ?? NSApp.mainWindow,
+           window.isVisible, window.attachedSheet == nil {
+            panel.beginSheetModal(for: window) { response in
+                if response == .OK { done(panel) }
+            }
+        } else if panel.runModal() == .OK {
+            done(panel)
+        }
+    }
+}
+
+/// Spoken by VoiceOver when long work ends (the window may be in the background).
+enum Accessibility {
+    static func announce(_ text: String) {
+        NSAccessibility.post(element: NSApp as Any, notification: .announcementRequested, userInfo: [
+            .announcement: text,
+            .priority: NSAccessibilityPriorityLevel.high.rawValue,
+        ])
     }
 }
 

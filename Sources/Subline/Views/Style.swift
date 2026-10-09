@@ -24,7 +24,10 @@ enum Palette {
     /// Fields, tracks, round buttons.
     static let fill = Color.white.opacity(0.12)
     static let secondary = Color.white.opacity(0.55)
-    static let tertiary = Color.white.opacity(0.35)
+    /// Quiet labels (units, sizes, the file summary): about 5:1 on black, above the 4.5:1 of WCAG AA.
+    static let tertiary = Color.white.opacity(0.5)
+    /// Placeholders of text fields: drawn by the app, the system ones are too faint on black.
+    static let placeholder = Color.white.opacity(0.45)
     /// Something needs a look: a missing font, a download that retries.
     static let attention = Color.orange
     static let danger = Color(red: 1, green: 0.42, blue: 0.4)
@@ -160,7 +163,7 @@ struct SectionTitle: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 4)
-        .frame(height: 18)
+        .frame(height: 22)
     }
 }
 
@@ -183,11 +186,130 @@ struct Row<Control: View>: View {
             }
             Spacer(minLength: 6)
             control
+                // Fields, swatches and sliders of the row are named after it for VoiceOver.
+                .environment(\.rowTitle, title)
         }
         .padding(.horizontal, 12)
         .frame(minHeight: Metrics.rowHeight)
         .contentShape(Rectangle())
         .help(help ?? "")
+    }
+}
+
+extension EnvironmentValues {
+    /// The name of the row a control sits in: its label for VoiceOver.
+    var rowTitle: String {
+        get { self[RowTitleKey.self] }
+        set { self[RowTitleKey.self] = newValue }
+    }
+}
+
+private struct RowTitleKey: EnvironmentKey {
+    static let defaultValue = ""
+}
+
+/// A tooltip without its shortcut, for VoiceOver: "Скрыть стиль (⌥⌘I)" is read as "Скрыть стиль".
+func spokenText(_ help: String) -> String {
+    guard help.hasSuffix(")"), let open = help.range(of: " (", options: .backwards) else { return help }
+    let inside = help[open.upperBound...].dropLast()
+    let shortcut = inside.contains { "⌘⌥⇧⌃←→↑↓".contains($0) } || inside == L("пробел")
+    return shortcut ? String(help[..<open.lowerBound]) : help
+}
+
+/// A highlight under a row that reacts to clicks anywhere in it.
+private struct RowHover: View {
+    let hovering: Bool
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 9, style: .continuous)
+            .fill(Color.white.opacity(hovering ? 0.05 : 0))
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2)
+    }
+}
+
+/// A row whose value is chosen from a menu: a click anywhere in the row opens it, under the value.
+struct MenuRow: View {
+    let title: String
+    var help: String?
+    var changed = false
+    var onReset: (() -> Void)?
+    let value: String
+    let entries: () -> [MenuEntry]
+    @State private var anchor = MenuAnchor()
+    @State private var hovering = false
+
+    var body: some View {
+        Row(title: title, help: help, changed: changed, onReset: onReset) {
+            HStack(spacing: 4) {
+                Text(value)
+                    .font(.system(size: 12.5))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 8.5, weight: .bold))
+            }
+            .foregroundStyle(Color.white.opacity(hovering ? 1 : 0.65))
+            .background(AnchorView(anchor: anchor))
+        }
+        .background(RowHover(hovering: hovering))
+        .onTapGesture { anchor.show(entries()) }
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: hovering)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .accessibilityValue(value)
+        .accessibilityHint(help ?? "")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { anchor.show(entries()) }
+    }
+}
+
+/// A row with a switch: a click anywhere in the row flips it.
+struct SwitchRow: View {
+    let title: String
+    var help: String?
+    @Binding var isOn: Bool
+    @State private var hovering = false
+
+    var body: some View {
+        Row(title: title, help: help) {
+            Switch(isOn: $isOn)
+        }
+        .background(RowHover(hovering: hovering))
+        .onTapGesture {
+            isOn.toggle()
+            Haptics.tap()
+        }
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: hovering)
+        // VoiceOver: one switch named after the row.
+        .accessibilityRepresentation {
+            Toggle(title, isOn: $isOn)
+                .accessibilityHint(help ?? "")
+        }
+    }
+}
+
+/// A row with a color: a click anywhere in the row opens the color panel for it.
+struct ColorRow: View {
+    let title: String
+    var changed = false
+    var onReset: (() -> Void)?
+    @Binding var color: Color
+    var opacity = true
+    @State private var owner = UUID()
+    @State private var hovering = false
+
+    var body: some View {
+        Row(title: title, changed: changed, onReset: onReset) {
+            ColorSwatch(color: $color, opacity: opacity, owner: owner)
+        }
+        .background(RowHover(hovering: hovering))
+        .onTapGesture { ColorSwatch.open(owner: owner, color: $color, opacity: opacity) }
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: hovering)
+        .accessibilityElement(children: .contain)
     }
 }
 
@@ -203,7 +325,9 @@ struct ResetButton: View {
                 .foregroundStyle(.white)
                 .frame(width: 16, height: 16)
                 .background(Circle().fill(Palette.fill))
-                .contentShape(Circle())
+                // A larger target than the circle: a click next to it counts.
+                .frame(width: 24, height: 24)
+                .contentShape(Rectangle())
         }
         .buttonStyle(PressStyle(scale: 0.85))
         .help(help)
@@ -250,7 +374,10 @@ private struct AppButtonBody: View {
             .padding(.horizontal, padding.h)
             .padding(.vertical, padding.v)
             .background(Capsule().fill(background(pressed: pressed)))
-            .contentShape(Capsule())
+            .focusRing(Capsule())
+            // A mini button is drawn smaller than it takes clicks: at least 24 pt high.
+            .frame(minHeight: controlSize == .mini ? 24 : nil)
+            .contentShape(Rectangle())
             .scaleEffect(pressed && !reduceMotion ? 0.92 : (grows ? 1.03 : 1))
             .brightness(pressed && kind == .primary ? -0.08 : 0)
             .opacity(isEnabled ? 1 : 0.4)
@@ -302,17 +429,86 @@ extension View {
     }
 }
 
-/// Sinks when pressed, springs back with a little bounce.
+/// Sinks when pressed, springs back with a little bounce. With the keyboard focus it gets the focus ring.
 struct PressStyle: ButtonStyle {
     var scale: CGFloat = 0.94
+    var ring = AnyShape(Capsule())
+
+    init(scale: CGFloat = 0.94) {
+        self.scale = scale
+    }
+
+    init<S: Shape>(scale: CGFloat = 0.94, ring: S) {
+        self.scale = scale
+        self.ring = AnyShape(ring)
+    }
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
+            .focusRing(ring)
             .scaleEffect(configuration.isPressed ? scale : 1)
             .brightness(configuration.isPressed ? -0.06 : 0)
             .animation(configuration.isPressed ? .spring(response: 0.18, dampingFraction: 0.8)
                                                : .spring(response: 0.35, dampingFraction: 0.45),
                        value: configuration.isPressed)
+    }
+}
+
+// MARK: - Keyboard focus
+
+extension View {
+    /// The system focus ring around `shape` while this button has the keyboard focus (keyboard navigation turned on in
+    /// System Settings). The button then takes Space from the player.
+    func focusRing<S: Shape>(_ shape: S) -> some View {
+        modifier(FocusRing(shape: AnyShape(shape), takesSpace: true, takesArrows: false))
+    }
+
+    /// A control set with the arrows (a slider, a stepper, the scrubber): it takes the keyboard focus with keyboard
+    /// navigation, shows the focus ring, and ← ↓ step down, → ↑ step up.
+    func keyboardAdjustable<S: Shape>(ring shape: S = Capsule(), arrows: @escaping (Int) -> Void) -> some View {
+        modifier(KeyboardAdjustable(shape: AnyShape(shape), step: arrows))
+    }
+}
+
+private struct FocusRing: ViewModifier {
+    let shape: AnyShape
+    let takesSpace: Bool
+    let takesArrows: Bool
+    @Environment(\.isFocused) private var isFocused
+    @State private var id = UUID()
+
+    func body(content: Content) -> some View {
+        content
+            .overlay {
+                shape
+                    .stroke(Color(nsColor: .keyboardFocusIndicatorColor), lineWidth: 2.5)
+                    .padding(-2.5)
+                    .opacity(isFocused ? 1 : 0)
+                    .allowsHitTesting(false)
+            }
+            .onChange(of: isFocused) { focused in
+                KeyboardFocus.set(id, focused: focused, space: takesSpace, arrows: takesArrows)
+            }
+            .onDisappear { KeyboardFocus.set(id, focused: false, space: false, arrows: false) }
+    }
+}
+
+private struct KeyboardAdjustable: ViewModifier {
+    let shape: AnyShape
+    let step: (Int) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .modifier(FocusRing(shape: shape, takesSpace: false, takesArrows: true))
+            // Like the controls of macOS: in the Tab order only with keyboard navigation, a click does not take focus.
+            .focusable(NSApp?.isFullKeyboardAccessEnabled ?? false)
+            .onMoveCommand { direction in
+                switch direction {
+                case .left, .down: step(-1)
+                case .right, .up: step(1)
+                @unknown default: break
+                }
+            }
     }
 }
 
@@ -331,7 +527,9 @@ struct IconLabel: View {
             .foregroundStyle(.white)
             .frame(width: size, height: size)
             .background(Circle().fill(fill))
-            .contentShape(Circle())
+            // The whole square around the circle takes the click, at least 24 × 24 pt.
+            .frame(minWidth: 24, minHeight: 24)
+            .contentShape(Rectangle())
             .opacity(isEnabled ? 1 : 0.35)
             .onHover { hovering = $0 }
             .animation(.easeOut(duration: 0.12), value: hovering)
@@ -356,7 +554,7 @@ struct IconButton: View {
         }
         .buttonStyle(PressStyle(scale: 0.88))
         .help(help)
-        .accessibilityLabel(help)
+        .accessibilityLabel(spokenText(help))
     }
 }
 
@@ -393,6 +591,7 @@ struct Switch: View {
                         .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
                 }
                 .contentShape(Capsule())
+                .focusRing(Capsule())
                 .animation(.spring(response: 0.3, dampingFraction: 0.68), value: isOn)
                 .animation(.spring(response: 0.22, dampingFraction: 0.75), value: pressed)
         }
@@ -432,7 +631,7 @@ struct Segments<Value: Hashable>: View {
     @Namespace private var pill
 
     var body: some View {
-        HStack(spacing: 1) {
+        HStack(spacing: 0) {
             ForEach(items, id: \.value) { item in
                 let selected = selection == item.value
                 Button {
@@ -449,7 +648,10 @@ struct Segments<Value: Hashable>: View {
                                 Capsule().fill(Color.white).matchedGeometryEffect(id: "pill", in: pill)
                             }
                         }
-                        .contentShape(Capsule())
+                        // The gaps around the pill take the click too: no dead edges between the options.
+                        .padding(.vertical, 2)
+                        .padding(.horizontal, 0.5)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(PressStyle())
                 .disabled(!item.enabled)
@@ -459,7 +661,7 @@ struct Segments<Value: Hashable>: View {
                 .accessibilityAddTraits(selected ? .isSelected : [])
             }
         }
-        .padding(2)
+        .padding(.horizontal, 1.5)
         .background(Capsule().fill(Palette.fill))
         .animation(.spring(response: 0.32, dampingFraction: 0.75), value: selection)
     }
@@ -520,6 +722,7 @@ struct Tile: View {
                         Circle().fill(Palette.attention).frame(width: 9, height: 9)
                             .overlay(Circle().stroke(Color.black, lineWidth: 1.5))
                             .offset(x: 2, y: -2)
+                            .accessibilityHidden(true)
                     }
                 }
                 Text(title)
@@ -535,7 +738,7 @@ struct Tile: View {
             .contentShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
             .opacity(isEnabled ? 1 : 0.4)
         }
-        .buttonStyle(PressStyle())
+        .buttonStyle(PressStyle(ring: RoundedRectangle(cornerRadius: 13, style: .continuous)))
         .onHover { hovering = $0 }
         .help(help)
         .onChange(of: on) { _ in
@@ -546,6 +749,7 @@ struct Tile: View {
         .animation(.easeOut(duration: 0.12), value: hovering)
         .accessibilityLabel(title)
         .accessibilityValue(on ? L("Вкл") : L("Выкл"))
+        .accessibilityHint(help)
     }
 
     private func ripple() {
@@ -587,10 +791,12 @@ struct ValueField: View {
     var fractionDigits = 0
     var width: CGFloat = 38
     @FocusState private var focused: Bool
+    @Environment(\.rowTitle) private var rowTitle
 
     var body: some View {
         HStack(spacing: 0) {
-            StepButton(symbol: "minus", atLimit: value <= range.lowerBound) { set(value - step) }
+            StepButton(symbol: "minus", title: rowTitle, atLimit: value <= range.lowerBound,
+                       action: { set(value - step) }, arrows: { set(value + Double($0) * step) })
             HStack(spacing: 2) {
                 TextField("", value: Binding(get: { value }, set: { set($0) }),
                           format: .number.precision(.fractionLength(0...fractionDigits)).grouping(.never))
@@ -599,14 +805,22 @@ struct ValueField: View {
                     .multilineTextAlignment(.trailing)
                     .frame(width: width)
                     .focused($focused)
+                    .accessibilityLabel(rowTitle)
+                    .accessibilityValue(unit.isEmpty ? "" : unit)
                 if !unit.isEmpty {
                     Text(unit)
                         .font(.system(size: 10.5))
                         .foregroundStyle(Palette.tertiary)
                         .fixedSize()
+                        .accessibilityHidden(true)
                 }
             }
-            StepButton(symbol: "plus", atLimit: value >= range.upperBound) { set(value + step) }
+            .frame(maxHeight: .infinity)
+            // A click on the unit or next to the number starts typing too.
+            .contentShape(Rectangle())
+            .onTapGesture { focused = true }
+            StepButton(symbol: "plus", title: rowTitle, atLimit: value >= range.upperBound,
+                       action: { set(value + step) }, arrows: { set(value + Double($0) * step) })
         }
         .frame(height: 24)
         .background(Capsule().fill(Palette.fill))
@@ -622,20 +836,28 @@ struct ValueField: View {
     }
 }
 
-/// − or + of a `ValueField`: steps once on press, then repeats while held.
+/// − or + of a `ValueField`: steps once on press, then repeats while held. With keyboard navigation it takes the
+/// focus, and the arrows step the value (← ↓ down, → ↑ up).
 private struct StepButton: View {
     let symbol: String
+    var title = ""
     let atLimit: Bool
     let action: () -> Void
+    var arrows: (Int) -> Void = { _ in }
     @StateObject private var repeater = Repeater()
     @State private var pressed = false
     @Environment(\.isEnabled) private var isEnabled
+
+    private var label: String {
+        if title.isEmpty { return symbol == "plus" ? L("Больше") : L("Меньше") }
+        return symbol == "plus" ? L("Увеличить «%@»", title) : L("Уменьшить «%@»", title)
+    }
 
     var body: some View {
         Image(systemName: symbol)
             .font(.system(size: 8.5, weight: .bold))
             .foregroundStyle(Color.white.opacity(!isEnabled || atLimit ? 0.25 : (pressed ? 1 : 0.7)))
-            .frame(width: 22, height: 24)
+            .frame(width: 24, height: 24)
             .contentShape(Rectangle())
             .scaleEffect(pressed ? 0.75 : 1)
             .animation(.spring(response: 0.2, dampingFraction: 0.6), value: pressed)
@@ -653,8 +875,9 @@ private struct StepButton: View {
                     }
             )
             .onDisappear { repeater.stop() }
+            .keyboardAdjustable(ring: Circle(), arrows: arrows)
             .accessibilityElement()
-            .accessibilityLabel(symbol == "plus" ? L("Больше") : L("Меньше"))
+            .accessibilityLabel(label)
             .accessibilityAddTraits(.isButton)
             .accessibilityAction { action() }
     }
@@ -688,6 +911,9 @@ struct AppSlider: View {
     var range: ClosedRange<Double>
     var step: Double = 0
     var tapsOnSteps = false
+    /// For VoiceOver: what the slider sets, and how its value reads (the number when nil).
+    var label = ""
+    var valueText: String?
     @State private var dragging = false
     @State private var hovering = false
 
@@ -727,12 +953,21 @@ struct AppSlider: View {
         .frame(height: 18)
         .animation(.spring(response: 0.25, dampingFraction: 0.7), value: dragging)
         .animation(.easeOut(duration: 0.12), value: hovering)
-        .accessibilityElement()
-        .accessibilityValue(Text(verbatim: "\(Int(value.rounded()))"))
-        .accessibilityAdjustableAction { direction in
-            let delta = step > 0 ? step : (range.upperBound - range.lowerBound) / 20
-            set(direction == .increment ? value + delta : value - delta)
+        .keyboardAdjustable(ring: RoundedRectangle(cornerRadius: 9, style: .continuous)) { direction in
+            set(value + Double(direction) * keyStep)
         }
+        // VoiceOver sees a real slider: its name, its value, and adjusting with the VO keys.
+        .accessibilityRepresentation {
+            Slider(value: Binding(get: { value }, set: { set($0) }), in: range, step: keyStep) {
+                Text(label)
+            }
+            .accessibilityValue(valueText ?? "\(Int(value.rounded()))")
+        }
+    }
+
+    /// One press of an arrow: the step, or a twentieth of the range.
+    private var keyStep: Double {
+        step > 0 ? step : (range.upperBound - range.lowerBound) / 20
     }
 
     private func set(_ newValue: Double) {
@@ -752,14 +987,24 @@ struct AppSlider: View {
 struct ColorSwatch: View {
     @Binding var color: Color
     var opacity = true
-    @State private var id = UUID()
+    /// The row the swatch sits in opens the same panel (ColorRow).
+    var owner: UUID?
+    @State private var ownID = UUID()
     @State private var hovering = false
+    @Environment(\.rowTitle) private var rowTitle
+
+    private var id: UUID { owner ?? ownID }
+
+    /// Opens the macOS color panel for a color.
+    static func open(owner: UUID, color: Binding<Color>, opacity: Bool) {
+        ColorPanelBridge.shared.open(owner: owner, color: NSColor(color.wrappedValue), opacity: opacity) { picked in
+            color.wrappedValue = Color(nsColor: picked)
+        }
+    }
 
     var body: some View {
         Button {
-            ColorPanelBridge.shared.open(owner: id, color: NSColor(color), opacity: opacity) { picked in
-                color = Color(nsColor: picked)
-            }
+            Self.open(owner: id, color: $color, opacity: opacity)
         } label: {
             Circle()
                 .fill(color)
@@ -767,13 +1012,16 @@ struct ColorSwatch: View {
                 .overlay(Circle().strokeBorder(Color.white.opacity(0.28), lineWidth: 1))
                 .padding(2)
                 .overlay(Circle().strokeBorder(Color.white.opacity(hovering ? 0.7 : 0), lineWidth: 1.5))
-                .contentShape(Circle())
+                .contentShape(Rectangle())
         }
         .buttonStyle(PressStyle(scale: 0.88))
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.12), value: hovering)
         .onDisappear { ColorPanelBridge.shared.release(owner: id) }
         .help(L("Выбрать цвет"))
+        .accessibilityLabel(rowTitle.isEmpty ? L("Цвет") : rowTitle)
+        .accessibilityValue(RGBAColor(color).spokenName)
+        .accessibilityHint(L("Открывает палитру цветов"))
     }
 }
 
@@ -857,31 +1105,6 @@ struct MenuButton<Label: View>: View {
     }
 }
 
-/// The current value as text with a chevron; a click opens the list of values.
-struct ValueMenu: View {
-    let value: String
-    let entries: () -> [MenuEntry]
-    @State private var hovering = false
-
-    var body: some View {
-        MenuButton(entries: entries) {
-            HStack(spacing: 4) {
-                Text(value)
-                    .font(.system(size: 12.5))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 8.5, weight: .bold))
-            }
-            .foregroundStyle(Color.white.opacity(hovering ? 1 : 0.65))
-            .contentShape(Rectangle())
-            .onHover { hovering = $0 }
-            .animation(.easeOut(duration: 0.12), value: hovering)
-        }
-        .buttonStyle(PressStyle(scale: 0.96))
-    }
-}
-
 /// A round button with ⋯ (or another symbol) that opens a menu.
 struct MenuIconButton: View {
     var symbol = "ellipsis"
@@ -896,7 +1119,7 @@ struct MenuIconButton: View {
         }
         .buttonStyle(PressStyle(scale: 0.88))
         .help(help)
-        .accessibilityLabel(help)
+        .accessibilityLabel(spokenText(help))
     }
 }
 
@@ -905,10 +1128,14 @@ struct SplitButton: View {
     let title: String
     let help: String
     let menuHelp: String
+    /// Looks unavailable but still takes the click, so the action can say why it cannot run.
+    var dimmed = false
     let action: () -> Void
     let entries: () -> [MenuEntry]
-    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.isEnabled) private var environmentEnabled
     @State private var hovering = false
+
+    private var isEnabled: Bool { environmentEnabled && !dimmed }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -923,9 +1150,12 @@ struct SplitButton: View {
             }
             .buttonStyle(SplitPartStyle())
             .help(help)
+            .accessibilityLabel(title)
+            .accessibilityHint(spokenText(help))
             Rectangle()
                 .fill(Color.black.opacity(0.15))
                 .frame(width: 1, height: 16)
+                .accessibilityHidden(true)
             MenuButton(entries: entries) {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 9.5, weight: .bold))
@@ -934,6 +1164,7 @@ struct SplitButton: View {
             }
             .buttonStyle(SplitPartStyle())
             .help(menuHelp)
+            .accessibilityLabel(menuHelp)
         }
         .foregroundStyle(.black)
         .background(Capsule().fill(Brand.mark.opacity(hovering && isEnabled ? 0.92 : 1)))
@@ -947,6 +1178,8 @@ struct SplitButton: View {
     private struct SplitPartStyle: ButtonStyle {
         func makeBody(configuration: Configuration) -> some View {
             configuration.label
+                // Inside the capsule (it clips what sticks out): the ring is drawn inset.
+                .focusRing(RoundedRectangle(cornerRadius: 12, style: .continuous).inset(by: 5))
                 .background(Color.black.opacity(configuration.isPressed ? 0.12 : 0))
                 .scaleEffect(configuration.isPressed ? 0.94 : 1)
                 .animation(configuration.isPressed ? .spring(response: 0.18, dampingFraction: 0.8)
@@ -971,24 +1204,29 @@ final class MenuAnchor {
     private static func menu(_ entries: [MenuEntry]) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
-        for entry in entries {
+        for item in items(entries) { menu.addItem(item) }
+        return menu
+    }
+
+    /// Menu items for the entries (also added to the menu of a text field).
+    static func items(_ entries: [MenuEntry]) -> [NSMenuItem] {
+        entries.map { entry in
             switch entry.kind {
             case .separator:
-                menu.addItem(.separator())
+                return .separator()
             case .header:
                 if #available(macOS 14.0, *) {
-                    menu.addItem(.sectionHeader(title: entry.title))
-                } else {
-                    let item = NSMenuItem(title: entry.title, action: nil, keyEquivalent: "")
-                    item.isEnabled = false
-                    menu.addItem(item)
+                    return .sectionHeader(title: entry.title)
                 }
+                let item = NSMenuItem(title: entry.title, action: nil, keyEquivalent: "")
+                item.isEnabled = false
+                return item
             case .item:
                 let item = NSMenuItem(title: entry.title, action: nil, keyEquivalent: "")
                 if !entry.children.isEmpty {
                     item.submenu = Self.menu(entry.children)
                 } else if let action = entry.action {
-                    let target = MenuTarget(action)
+                    let target = MenuTarget(action, enabled: entry.enabled)
                     item.target = target
                     item.action = #selector(MenuTarget.run)
                     // The menu item does not keep its target.
@@ -996,22 +1234,28 @@ final class MenuAnchor {
                 }
                 item.state = entry.checked ? .on : .off
                 item.isEnabled = entry.enabled
-                menu.addItem(item)
+                return item
             }
         }
-        return menu
     }
 }
 
-private final class MenuTarget: NSObject {
+private final class MenuTarget: NSObject, NSMenuItemValidation {
     let action: () -> Void
+    let enabled: Bool
 
-    init(_ action: @escaping () -> Void) {
+    init(_ action: @escaping () -> Void, enabled: Bool) {
         self.action = action
+        self.enabled = enabled
     }
 
     @objc func run() {
         action()
+    }
+
+    /// Menus that enable their items by themselves (the menu of a text field) keep the entry's state.
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        enabled
     }
 }
 
@@ -1045,10 +1289,22 @@ struct CapsuleField: View {
                     .font(.system(size: 11.5, weight: .medium))
                     .foregroundStyle(Palette.secondary)
             }
-            TextField(prompt, text: $text)
+            TextField("", text: $text)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12.5))
                 .focused($focused)
+                // A placeholder of our own: the system one is too faint on black.
+                .overlay(alignment: .leading) {
+                    if text.isEmpty {
+                        Text(prompt)
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(Palette.placeholder)
+                            .lineLimit(1)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
+                }
+                .accessibilityLabel(prompt)
             if !text.isEmpty && symbol == "magnifyingglass" {
                 Button {
                     text = ""
@@ -1059,6 +1315,7 @@ struct CapsuleField: View {
                 }
                 .buttonStyle(PressStyle(scale: 0.85))
                 .help(L("Очистить"))
+                .accessibilityLabel(L("Очистить"))
             }
         }
         .padding(.horizontal, 10)
@@ -1115,6 +1372,13 @@ struct ProgressLine: View {
         }
         .frame(height: 4)
         .animation(.easeOut(duration: 0.2), value: value)
+        .accessibilityRepresentation {
+            if let value {
+                ProgressView(value: min(1, max(0, value)))
+            } else {
+                ProgressView()
+            }
+        }
     }
 }
 
@@ -1202,6 +1466,41 @@ struct WindowDragArea: NSViewRepresentable {
     }
 }
 
+/// Closing the main window quits Subline. Subtitles and edits are saved by themselves, but running recognition or
+/// export would be lost, so the red button and ⌘W ask first while one runs.
+@MainActor
+final class WindowCloseGuard: NSObject {
+    static let shared = WindowCloseGuard()
+    /// True when the window may close now (the app asks about running work and stops it).
+    var mayClose: () -> Bool = { true }
+
+    func guardCloseButton(of window: NSWindow) {
+        guard let button = window.standardWindowButton(.closeButton), button.target !== self else { return }
+        button.target = self
+        button.action = #selector(closeClicked(_:))
+    }
+
+    @objc private func closeClicked(_ sender: NSButton) {
+        guard let window = sender.window else { return }
+        close(window)
+    }
+
+    private func close(_ window: NSWindow) {
+        guard mayClose() else { return }
+        window.close()
+    }
+
+    /// ⌘W: the main window through the question, any other window as usual.
+    func closeKeyWindow() {
+        guard let window = NSApp.keyWindow else { return }
+        if window.standardWindowButton(.closeButton)?.target === self {
+            close(window)
+        } else {
+            window.performClose(nil)
+        }
+    }
+}
+
 /// How the window's own controls sit: the height of the titlebar (the traffic lights are in its middle) and where
 /// they end.
 struct WindowChrome: Equatable {
@@ -1254,6 +1553,8 @@ struct WindowConfigurator: NSViewRepresentable {
 
         private func report() {
             guard let window else { return }
+            // The window's buttons can be made anew (full screen): the close button is guarded each time.
+            WindowCloseGuard.shared.guardCloseButton(of: window)
             var chrome = WindowChrome()
             chrome.fullScreen = window.styleMask.contains(.fullScreen)
             let titlebar = window.frame.height - window.contentLayoutRect.height

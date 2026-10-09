@@ -91,7 +91,9 @@ public enum BoxMode: String, Codable, CaseIterable, Identifiable, Sendable {
 /// A subtitle style preset. Sizes are in pixels for a 1080p frame (measured on the short side)
 /// and scale proportionally with the video resolution.
 public struct SubtitlePreset: Codable, Hashable, Identifiable, Sendable {
-    public static let defaultFontFamily = "Stapel"
+    /// Oswald ships with the app (SIL OFL), so the built-in presets look the same on every Mac, Cyrillic included:
+    /// a narrow dense sans like Stapel, which was the default before and is a paid font.
+    public static let defaultFontFamily = "Oswald"
     public static let referenceShortSide: Double = 1080
 
     public var id: UUID
@@ -243,21 +245,40 @@ public struct SubtitlePreset: Codable, Hashable, Identifiable, Sendable {
 
     // MARK: Built-in presets
 
+    /// The built-in presets keep these identifiers on every Mac, so «Восстановить стандартные пресеты» finds them even
+    /// after they were renamed or changed.
+    public static let builtInIDs: [UUID] = [
+        "5B11E000-0000-4000-8000-000000000001", "5B11E000-0000-4000-8000-000000000002",
+        "5B11E000-0000-4000-8000-000000000003", "5B11E000-0000-4000-8000-000000000004",
+    ].map { UUID(uuidString: $0)! }
+
+    /// Every name a built-in preset has had, in both languages: a preset saved under such a name by an older version
+    /// (with an identifier of its own) is that built-in preset.
+    static let builtInNames: [Set<String>] = [
+        ["Reels / Shorts — 2 строки", "Reels / Shorts — 2 lines"],
+        ["Reels / Shorts — 1 строка", "Reels / Shorts — 1 line"],
+        ["YouTube — классические", "YouTube — classic"],
+        ["С подложкой", "With Background", "Плашка", "Plate"],
+    ]
+
     public static var builtIn: [SubtitlePreset] {
         [
             SubtitlePreset(
+                id: builtInIDs[0],
                 name: L("Reels / Shorts — 2 строки"),
                 fontFace: "Bold", fontSize: 76,
                 outlineWidth: 5,
                 positionY: 0.72, anchor: .center, maxWidth: 0.84, maxLines: 2
             ),
             SubtitlePreset(
+                id: builtInIDs[1],
                 name: L("Reels / Shorts — 1 строка"),
                 fontFace: "Bold", fontSize: 84,
                 outlineWidth: 6,
                 positionY: 0.70, anchor: .center, maxWidth: 0.88, maxLines: 1, maxWordsPerCue: 4
             ),
             SubtitlePreset(
+                id: builtInIDs[2],
                 name: L("YouTube — классические"),
                 fontFace: "Medium", fontSize: 52,
                 outlineWidth: 3.5,
@@ -265,13 +286,42 @@ public struct SubtitlePreset: Codable, Hashable, Identifiable, Sendable {
                 positionY: 0.92, anchor: .bottom, maxWidth: 0.8, maxLines: 2, maxCueDuration: 6
             ),
             SubtitlePreset(
-                name: L("Плашка"),
+                id: builtInIDs[3],
+                name: L("С подложкой"),
                 fontFace: "Medium", fontSize: 56,
                 outlineEnabled: false,
                 boxMode: .perLine, boxColor: RGBAColor.black.withAlpha(0.7),
                 positionY: 0.88, anchor: .bottom, maxWidth: 0.82, maxLines: 2
             ),
         ]
+    }
+
+    /// The presets after «Восстановить стандартные пресеты»: every built-in preset gets its original look back in its
+    /// place (found by identifier, or by name when an older version saved it under another identifier), a missing one
+    /// comes back at the end. The person's own presets stay as they are.
+    public static func restoringBuiltIn(in presets: [SubtitlePreset]) -> [SubtitlePreset] {
+        var result = presets
+        let ids = Set(builtInIDs)
+        var used = Set<Int>()
+        for (number, original) in builtIn.enumerated() {
+            let names = builtInNames[number].union([original.name])
+            if let index = result.firstIndex(where: { $0.id == original.id }) {
+                result[index] = original
+                used.insert(index)
+            } else if let index = result.indices.first(where: {
+                !used.contains($0) && !ids.contains(result[$0].id) && names.contains(result[$0].name)
+            }) {
+                // Saved by an older version: the identifier stays, so videos styled with it still find it.
+                var restored = original
+                restored.id = result[index].id
+                result[index] = restored
+                used.insert(index)
+            } else {
+                result.append(original)
+                used.insert(result.count - 1)
+            }
+        }
+        return result
     }
 
     // MARK: Codable with defaults (older preset files keep working when fields are added)

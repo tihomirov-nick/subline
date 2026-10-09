@@ -10,6 +10,9 @@ struct InspectorView: View {
     var body: some View {
         VStack(spacing: 0) {
             VStack(spacing: 8) {
+                if model.hasMedia && !model.hasVideo {
+                    AudioNote()
+                }
                 PresetBar()
                 ScopeBar()
                 Segments(selection: $model.inspectorTab,
@@ -48,6 +51,27 @@ struct InspectorView: View {
     }
 }
 
+/// An audio file is exported only to SRT, and SRT keeps no style: said before the style is set up for nothing.
+private struct AudioNote: View {
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "info.circle")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Palette.secondary)
+                .accessibilityHidden(true)
+            Text(L("Это аудио, его можно экспортировать только в SRT. В SRT попадают текст и время, стиль виден лишь в превью"))
+                .font(.system(size: 11.5))
+                .foregroundStyle(Palette.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card(radius: 12)
+        .accessibilityElement(children: .combine)
+    }
+}
+
 // MARK: - Preset
 
 private struct PresetBar: View {
@@ -83,6 +107,8 @@ private struct PresetBar: View {
             }
             .buttonStyle(PressStyle(scale: 0.97))
             .help(L("Пресет хранит общий стиль всех субтитров"))
+            .accessibilityLabel(L("Пресет"))
+            .accessibilityValue(model.preset.name)
             MenuIconButton(help: L("Действия с пресетом"), size: 30) {
                 [
                     .item(L("Новый пресет")) { model.addPreset() },
@@ -96,7 +122,7 @@ private struct PresetBar: View {
                     .item(L("Экспортировать все пресеты…")) { model.exportPresets(all: true) },
                     .item(L("Импортировать пресеты…")) { model.importPresets() },
                     .separator,
-                    .item(L("Восстановить стандартные пресеты")) { model.restoreBuiltInPresets() },
+                    .item(L("Восстановить стандартные пресеты…")) { model.requestRestoreBuiltInPresets() },
                     .item(L("Удалить пресет…"), enabled: model.presets.count > 1) { confirmDelete = true },
                 ]
             }
@@ -134,6 +160,7 @@ private struct ScopeBar: View {
                 Circle()
                     .fill(scopeColor)
                     .frame(width: 7, height: 7)
+                    .accessibilityHidden(true)
                 Text(model.scopeTitle)
                     .font(.system(size: 11.5, weight: .medium))
                     .foregroundStyle(Palette.secondary)
@@ -189,7 +216,7 @@ private struct ScopeBar: View {
         case .all: return L("Менять общий стиль всех субтитров")
         case .group:
             return model.contextGroupID == nil ? L("Выделите субтитры одной группы или создайте группу (⌘G)") : L("Стиль группы")
-        case .cues: return L("Только выбранные субтитры (или тот, что под курсором)")
+        case .cues: return L("Только выбранные субтитры (или тот, что на текущем кадре)")
         case .words: return L("Щёлкните слово на видео, с ⇧ можно выбрать несколько. Стиль слов сохраняется при правке текста")
         }
     }
@@ -211,6 +238,14 @@ private struct ScopeBar: View {
 private func styleRow<T, C: View>(_ model: AppModel, _ title: String, _ key: WritableKeyPath<StyleOverride, T?>,
                                   help: String? = nil, @ViewBuilder control: () -> C) -> some View {
     Row(title: title, help: help, changed: model.isOverridden(key), onReset: { model.resetStyle(key) }, control: control)
+}
+
+/// A color of the style: a click anywhere in the row opens the color panel.
+@MainActor
+private func colorRow(_ model: AppModel, _ title: String, _ presetKey: WritableKeyPath<SubtitlePreset, RGBAColor>,
+                      _ key: WritableKeyPath<StyleOverride, RGBAColor?>) -> some View {
+    ColorRow(title: title, changed: model.isOverridden(key), onReset: { model.resetStyle(key) },
+             color: colorBinding(model.binding(presetKey, key)))
 }
 
 /// A titled group: the name above, the content (usually a card) below.
@@ -255,8 +290,10 @@ private struct SliderRow: View {
                 }
                 Spacer(minLength: 6)
                 ValueField(value: $value, range: range, step: step, unit: unit)
+                    .environment(\.rowTitle, title)
             }
-            AppSlider(value: $value, range: range, step: step)
+            AppSlider(value: $value, range: range, step: step, label: title,
+                      valueText: "\(Int(value.rounded())) \(unit)")
         }
         .padding(.horizontal, 12)
         .padding(.top, 7)
@@ -289,11 +326,10 @@ private struct TextTab: View {
                                  warning: fontWarning(style))
                     .padding(6)
                 Separator()
-                styleRow(model, L("Начертание"), \.fontFace) {
-                    ValueMenu(value: style.fontFace) {
-                        faceNames(style.fontFamily, current: style.fontFace).map { name in
-                            .item(name, checked: name == style.fontFace) { model.setStyle(\.fontFace, \.fontFace, name) }
-                        }
+                MenuRow(title: L("Начертание"), changed: model.isOverridden(\.fontFace), onReset: { model.resetStyle(\.fontFace) },
+                        value: style.fontFace) {
+                    faceNames(style.fontFamily, current: style.fontFace).map { name in
+                        .item(name, checked: name == style.fontFace) { model.setStyle(\.fontFace, \.fontFace, name) }
                     }
                 }
                 Separator()
@@ -318,9 +354,7 @@ private struct TextTab: View {
             SliderRow(title: L("Наклон"), value: model.binding(\.slant, \.slant), range: -30...30, unit: "°",
                       changed: model.isOverridden(\.slant), onReset: { model.resetStyle(\.slant) })
             Separator()
-            styleRow(model, L("Цвет текста"), \.textColor) {
-                ColorSwatch(color: colorBinding(model.binding(\.textColor, \.textColor)))
-            }
+            colorRow(model, L("Цвет текста"), \.textColor, \.textColor)
         }
         .card()
         HStack(spacing: 8) {
@@ -412,7 +446,8 @@ private struct WeightRow: View {
                             model.setStyle(\.fontFace, \.fontFace, faces[i].styleName)
                         }
                     }
-                ), range: 0...Double(faces.count - 1), step: 1, tapsOnSteps: true)
+                ), range: 0...Double(faces.count - 1), step: 1, tapsOnSteps: true,
+                   label: L("Жирность"), valueText: faces[min(index, faces.count - 1)].styleName)
             }
         }
         .padding(.horizontal, 12)
@@ -492,12 +527,10 @@ private struct LayoutTab: View {
         if model.scope == .all {
             StyleSection(L("Нарезка на субтитры")) {
                 VStack(spacing: 0) {
-                    Row(title: L("Слов на экране")) {
-                        ValueMenu(value: wordLimitTitle(model.preset.maxWordsPerCue)) {
-                            ([0] + [1, 2, 3, 4, 5, 6, 7, 8, 10, 12]).map { count in
-                                .item(wordLimitTitle(count), checked: count == model.preset.maxWordsPerCue) {
-                                    model.preset.maxWordsPerCue = count
-                                }
+                    MenuRow(title: L("Слов на экране"), value: wordLimitTitle(model.preset.maxWordsPerCue)) {
+                        ([0] + [1, 2, 3, 4, 5, 6, 7, 8, 10, 12]).map { count in
+                            .item(wordLimitTitle(count), checked: count == model.preset.maxWordsPerCue) {
+                                model.preset.maxWordsPerCue = count
                             }
                         }
                     }
@@ -534,17 +567,15 @@ private struct EffectsTab: View {
                     toggle(model.binding(\.shadowEnabled, \.shadowEnabled))
                 }
             }
-            Tile(symbol: "highlighter", title: L("Плашка"), on: style.highlightEnabled,
-                 help: words ? L("Плашка под выбранными словами") : L("Плашка под каждым словом")) {
+            Tile(symbol: "highlighter", title: L("Подсветка"), on: style.highlightEnabled,
+                 help: words ? L("Цветной фон под выбранными словами") : L("Цветной фон под каждым словом")) {
                 toggle(model.highlightBinding)
             }
         }
         if style.outlineEnabled {
             StyleSection(L("Обводка")) {
                 VStack(spacing: 0) {
-                    styleRow(model, L("Цвет"), \.outlineColor) {
-                        ColorSwatch(color: colorBinding(model.binding(\.outlineColor, \.outlineColor)))
-                    }
+                    colorRow(model, L("Цвет"), \.outlineColor, \.outlineColor)
                     Separator()
                     styleRow(model, L("Толщина"), \.outlineWidth) {
                         ValueField(value: model.pixels(\.outlineWidth, \.outlineWidth), range: 1...80)
@@ -557,9 +588,7 @@ private struct EffectsTab: View {
         if style.shadowEnabled && !words {
             StyleSection(L("Тень")) {
                 VStack(spacing: 0) {
-                    styleRow(model, L("Цвет"), \.shadowColor) {
-                        ColorSwatch(color: colorBinding(model.binding(\.shadowColor, \.shadowColor)))
-                    }
+                    colorRow(model, L("Цвет"), \.shadowColor, \.shadowColor)
                     Separator()
                     styleRow(model, L("Размытие"), \.shadowBlur) {
                         ValueField(value: model.pixels(\.shadowBlur, \.shadowBlur), range: 0...200)
@@ -588,9 +617,7 @@ private struct EffectsTab: View {
                          fill: true, large: true)
                 if style.boxMode != .none {
                     VStack(spacing: 0) {
-                        styleRow(model, L("Цвет"), \.boxColor) {
-                            ColorSwatch(color: colorBinding(model.binding(\.boxColor, \.boxColor)))
-                        }
+                        colorRow(model, L("Цвет"), \.boxColor, \.boxColor)
                         Separator()
                         styleRow(model, L("Отступы"), \.boxPadding) {
                             ValueField(value: model.pixels(\.boxPadding, \.boxPadding), range: 0...200)
@@ -627,11 +654,9 @@ private struct HighlightSection: View {
 
     var body: some View {
         let current = model.effectiveStyle.highlightColor
-        StyleSection(L("Плашка")) {
+        StyleSection(L("Подсветка слов")) {
             VStack(spacing: 0) {
-                styleRow(model, L("Цвет"), \.highlightColor) {
-                    ColorSwatch(color: colorBinding(model.binding(\.highlightColor, \.highlightColor)))
-                }
+                colorRow(model, L("Цвет"), \.highlightColor, \.highlightColor)
                 Separator()
                 HStack(spacing: 0) {
                     ForEach(Self.swatches, id: \.self) { color in
@@ -645,10 +670,13 @@ private struct HighlightSection: View {
                                 .overlay(Circle().strokeBorder(Color.white.opacity(0.25)))
                                 .padding(2.5)
                                 .overlay(Circle().strokeBorder(Color.white, lineWidth: color == current ? 2 : 0))
-                                .contentShape(Circle())
+                                // The whole column of the swatch takes the click, not only the circle.
+                                .frame(maxWidth: .infinity, minHeight: Metrics.rowHeight)
+                                .contentShape(Rectangle())
                         }
                         .buttonStyle(PressStyle(scale: 0.85))
-                        .frame(maxWidth: .infinity)
+                        .accessibilityLabel(color.spokenName)
+                        .accessibilityAddTraits(color == current ? .isSelected : [])
                     }
                 }
                 .padding(.horizontal, 6)

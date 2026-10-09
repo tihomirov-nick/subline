@@ -1,9 +1,12 @@
 import Foundation
 import CoreGraphics
+import UniformTypeIdentifiers
 
 public enum MediaError: LocalizedError {
     case ffmpegNotFound
     case unreadable(String)
+    /// A still picture (JPEG, PNG, HEIC…): nothing to recognize or to put subtitles on.
+    case image
     case noAudio
     case noVideo
     case failed(String)
@@ -13,8 +16,9 @@ public enum MediaError: LocalizedError {
         switch self {
         case .ffmpegNotFound: return L("Не найден встроенный ffmpeg. Переустановите приложение")
         case .unreadable(let details): return L("Не удалось открыть файл как видео или аудио.\n%@", "\(details)")
+        case .image: return L("Это картинка. Субтитры делаются к видео и аудио")
         case .noAudio: return L("В файле нет звуковой дорожки, распознавать нечего")
-        case .noVideo: return L("В файле нет видеодорожки. Для аудио можно сохранить только SRT")
+        case .noVideo: return L("В файле нет видеодорожки. Аудио можно экспортировать только в SRT")
         case .failed(let details): return L("Ошибка ffmpeg:\n%@", "\(details)")
         case .cancelled: return L("Отменено")
         }
@@ -67,7 +71,7 @@ public struct MediaInfo: Sendable {
         var parts: [String] = []
         if hasVideo { parts.append("\(width)×\(height)") }
         if let fps { parts.append(String(format: fps.rounded() == fps ? "%.0f fps" : "%.2f fps", fps)) }
-        parts.append(formatTimecode(duration, short: true))
+        parts.append(ClockFormat(duration: duration).string(duration))
         if let codec = videoCodec { parts.append(codec.uppercased()) }
         return parts.joined(separator: " · ")
     }
@@ -168,7 +172,9 @@ public enum FFmpeg {
     // MARK: - Probe
 
     public static func probe(_ url: URL) async throws -> MediaInfo {
+        if isPicture(url) { throw MediaError.image }
         let result = try await run(["-hide_banner", "-nostdin", "-i", url.path], allowFailure: true)
+        if isPicture(probeOutput: result.stderr) { throw MediaError.image }
         guard var info = parseProbe(result.stderr, url: url) else {
             throw MediaError.unreadable(lastLines(result.stderr, count: 3))
         }
@@ -176,6 +182,19 @@ public enum FFmpeg {
             info.duration = try await measureDuration(url)
         }
         return info
+    }
+
+    /// A picture by its name: ffmpeg would read a JPEG as a video of one frame.
+    static func isPicture(_ url: URL) -> Bool {
+        guard let type = UTType(filenameExtension: url.pathExtension.lowercased()) else { return false }
+        return type.conforms(to: .image) && !type.conforms(to: .movie)
+    }
+
+    /// A picture by what ffmpeg found inside: its image readers are "image2" and "…_pipe" (jpeg_pipe, png_pipe…).
+    static func isPicture(probeOutput text: String) -> Bool {
+        guard let format = firstMatch(#"Input #0, ([A-Za-z0-9_,]+), from"#, in: text)?[1] else { return false }
+        let names = format.split(separator: ",").map(String.init)
+        return names.contains { $0 == "image2" || $0.hasSuffix("_pipe") }
     }
 
     /// Decodes the file quickly to find its duration when the container does not store it.
@@ -392,6 +411,24 @@ public enum FFmpeg {
             _ = data.copyBytes(to: buffer)
         }
         return samples
+    }
+}
+
+/// How loud the sound is, to tell silence from speech in a language the model did not catch.
+public enum AudioLevel {
+    /// True when no 50 ms piece of the sound gets louder than -50 dBFS: digital silence or quiet room noise, no voice.
+    public static func isSilent(_ samples: [Float], sampleRate: Int = 16000) -> Bool {
+        let window = max(1, sampleRate / 20)
+        let threshold: Float = 0.00316   // -50 dBFS
+        var start = 0
+        while start < samples.count {
+            let end = min(samples.count, start + window)
+            var sum: Float = 0
+            for i in start..<end { sum += samples[i] * samples[i] }
+            if (sum / Float(end - start)).squareRoot() > threshold { return false }
+            start = end
+        }
+        return true
     }
 }
 

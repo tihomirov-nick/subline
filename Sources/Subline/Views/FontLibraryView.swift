@@ -57,8 +57,9 @@ struct FontLibraryView: View {
                     let panel = NSOpenPanel()
                     panel.allowedContentTypes = [.font, UTType(filenameExtension: "otf"), UTType(filenameExtension: "ttf")].compactMap { $0 }
                     panel.allowsMultipleSelection = true
-                    guard panel.runModal() == .OK else { return }
-                    importFiles(panel.urls)
+                    AppModel.present(panel) { panel in
+                        importFiles((panel as? NSOpenPanel)?.urls ?? [])
+                    }
                 }
                 .appButton(.secondary)
                 .controlSize(.small)
@@ -213,6 +214,11 @@ private struct FontCard: View {
             RoundedRectangle(cornerRadius: Metrics.cardRadius, style: .continuous)
                 .strokeBorder(Color.white.opacity(inUse ? 0.85 : 0), lineWidth: 1.5)
         )
+        // An installed font is applied by a click anywhere on its card, not only on "Apply".
+        .contentShape(RoundedRectangle(cornerRadius: Metrics.cardRadius, style: .continuous))
+        .onTapGesture {
+            if installed && !inUse { model.setStyle(\.fontFamily, \.fontFamily, family) }
+        }
         .onHover { hovering = $0 }
         .onAppear { fontStore.requestPreview(font) }
     }

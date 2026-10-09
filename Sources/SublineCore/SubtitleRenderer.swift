@@ -17,6 +17,20 @@ public struct PlacedWord {
     let metrics: LayoutStyle
 }
 
+/// The lines a subtitle takes against the lines its style allows.
+public struct LineFit: Equatable, Sendable {
+    public let lines: Int
+    public let maxLines: Int
+
+    public init(lines: Int, maxLines: Int) {
+        self.lines = lines
+        self.maxLines = maxLines
+    }
+
+    /// The text is longer than the lines of the style: it is drawn on more lines than they allow.
+    public var overflows: Bool { lines > maxLines }
+}
+
 /// A subtitle laid out in the frame.
 public struct CueLayout {
     public let words: [PlacedWord]
@@ -119,11 +133,6 @@ public final class CueRenderer {
         max(left.metrics.spaceWidth, right.metrics.spaceWidth) + left.pad + right.pad
     }
 
-    private static func highlightInsets(_ style: SubtitlePreset, metrics: LayoutStyle) -> CGSize {
-        let size = CTFontGetSize(metrics.font)
-        return CGSize(width: size * 0.16 + metrics.outline, height: size * 0.1 + metrics.outline)
-    }
-
     private func tokens(for cue: Cue, cueStyle: SubtitlePreset) -> [Token] {
         var result: [Token] = []
         for (index, token) in CueText.tokens(cue.text).enumerated() {
@@ -131,14 +140,13 @@ public final class CueRenderer {
             if let override = cue.wordStyles?[index] {
                 wordStyle = override.wordLevel.applied(to: cueStyle)
             }
-            var display = TextTransformer.apply(token.word, mode: wordStyle.caseMode)
-            if wordStyle.uppercase { display = display.uppercased(with: Locale(identifier: "ru_RU")) }
+            let metrics = metrics(wordStyle)
+            let display = metrics.displayText(token.word)
             guard !display.isEmpty else {
                 if token.breakAfter, !result.isEmpty { result[result.count - 1].breakAfter = true }
                 continue
             }
-            let metrics = metrics(wordStyle)
-            let pad = wordStyle.highlightEnabled ? Self.highlightInsets(wordStyle, metrics: metrics).width : 0
+            let pad = metrics.highlightPad
             result.append(Token(index: index, text: display, breakAfter: token.breakAfter,
                                 style: wordStyle, metrics: metrics, width: metrics.width(display), pad: pad))
         }
@@ -151,11 +159,13 @@ public final class CueRenderer {
         let words = tokens(for: cue, cueStyle: cueStyle)
         guard !words.isEmpty else { return nil }
 
-        // Lines: manual breaks first, then balanced wrapping inside each paragraph.
+        // Lines: manual breaks first, then balanced wrapping inside each paragraph. A one-line style has no manual
+        // breaks: a break left in the text from a style with more lines counts as a space.
+        let keepsBreaks = cueStyle.maxLines > 1
         var paragraphs: [[Token]] = [[]]
         for word in words {
             paragraphs[paragraphs.count - 1].append(word)
-            if word.breakAfter { paragraphs.append([]) }
+            if word.breakAfter && keepsBreaks { paragraphs.append([]) }
         }
         paragraphs.removeAll { $0.isEmpty }
         var lines: [[Token]] = []
@@ -250,6 +260,42 @@ public final class CueRenderer {
                          style: cueStyle, metrics: base)
     }
 
+    // MARK: Fitting the lines of the style
+
+    /// How many lines the subtitle takes and how many its style allows.
+    public func fit(_ cue: Cue) -> LineFit {
+        LineFit(lines: layout(cue)?.lineRects.count ?? 0, maxLines: max(1, style(for: cue).maxLines))
+    }
+
+    /// Where to cut a subtitle into two (the index of the word that starts the second one): both parts fit the lines
+    /// of the style when that is possible, their lengths are close, and the cut prefers the end of a sentence or a
+    /// clause to a hanging preposition. Nil for a single word.
+    public func splitPoint(_ cue: Cue) -> Int? {
+        let words = CueText.words(cue.text)
+        guard words.count > 1 else { return nil }
+        let maxLines = max(1, style(for: cue).maxLines)
+        var best: (cost: Double, index: Int)?
+        for k in 1..<words.count {
+            let (first, second) = CueEditor.parts(of: cue, beforeWord: k)
+            guard let a = layout(first), let b = layout(second) else { continue }
+            let widthA = a.lineRects.map(\.width).reduce(0, +)
+            let widthB = b.lineRects.map(\.width).reduce(0, +)
+            // 0.5 for equal halves, up to 1 for a lone word on one side.
+            var cost = Double(max(widthA, widthB) / max(widthA + widthB, 1))
+            cost += Double(max(0, a.lineRects.count - maxLines) + max(0, b.lineRects.count - maxLines)) * 10
+            // Two subtitles read best when the cut falls on a sentence or a clause.
+            let last = words[k - 1]
+            if TextTransformer.endsSentence(last) {
+                cost -= 0.5
+            } else if TextTransformer.endsClause(last) || TextTransformer.startsWithDash(words[k]) {
+                cost -= 0.3
+            }
+            if TextTransformer.isHanging(last) { cost += 0.3 }
+            if best == nil || cost < best!.cost { best = (cost, k) }
+        }
+        return best?.index
+    }
+
     /// Lines of display text (case/punctuation applied), e.g. for SRT.
     public func displayLines(_ cue: Cue) -> [String] {
         guard let layout = layout(cue) else { return [] }
@@ -319,7 +365,7 @@ public final class CueRenderer {
         // 2. Highlight plates behind single words
         for word in layout.words where word.style.highlightEnabled && word.style.highlightColor.a > 0 {
             let size = CTFontGetSize(word.metrics.font)
-            let insets = Self.highlightInsets(word.style, metrics: word.metrics)
+            let insets = word.metrics.highlightInsets
             let plate = word.rect.insetBy(dx: -insets.width, dy: -insets.height)
             let r = min(size * 0.22, plate.height / 2)
             context.setFillColor(word.style.highlightColor.cgColor)

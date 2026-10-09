@@ -180,6 +180,30 @@ public func formatTimecode(_ seconds: Double, short: Bool = false) -> String {
     return String(format: "%02d:%02d:%02d.%03d", h, m, sec, ms)
 }
 
+/// Times in the interface, one style everywhere: "0:12.48", and "0:00:12.48" for a video of an hour or longer, where
+/// every time has the hours so that the columns line up. Centiseconds are rounded to the nearest.
+public struct ClockFormat: Equatable, Sendable {
+    public let showsHours: Bool
+
+    public init(duration: Double) {
+        showsHours = duration >= 3600
+    }
+
+    public func string(_ seconds: Double) -> String {
+        // A small epsilon: 9.2 s reads 9.20, not 9.19 (binary floating point).
+        let total = Int((max(0, seconds) * 100 + 0.001).rounded())
+        let cs = total % 100
+        let s = (total / 100) % 60
+        let m = (total / 6000) % 60
+        let h = total / 360_000
+        if showsHours || h > 0 { return String(format: "%d:%02d:%02d.%02d", h, m, s, cs) }
+        return String(format: "%d:%02d.%02d", total / 6000, s, cs)
+    }
+
+    /// The longest text of this format, for the width of a field: "00:00.00" or "0:00:00.00".
+    public var widest: String { showsHours ? "0:00:00.00" : "00:00.00" }
+}
+
 /// Parses "1:02.5", "00:01:02,345", "62.5" into seconds.
 public func parseTimecode(_ text: String) -> Double? {
     let cleaned = text.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: ".")

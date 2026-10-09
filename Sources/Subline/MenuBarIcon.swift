@@ -122,8 +122,8 @@ final class MenuBarIcon: NSObject {
         if let outcome { return outcome == .success ? L("Готово") : L("Не получилось") }
         let percent = progress.map { "\(Int(($0 * 100).rounded()))" }
         switch work {
-        case .recognition: return percent.map { L("Распознаю речь — %@ %%", $0) } ?? L("Распознаю речь")
-        case .export: return percent.map { L("Экспорт — %@ %%", $0) } ?? L("Экспорт")
+        case .recognition: return percent.map { L("Распознаю речь: %@ %%", $0) } ?? L("Распознаю речь")
+        case .export: return percent.map { L("Экспорт: %@ %%", $0) } ?? L("Экспорт")
         case nil: return ""
         }
     }
@@ -179,8 +179,9 @@ final class MenuBarIcon: NSObject {
 }
 
 /// The glyph, drawn in code as a template image: the outline of the app icon's squircle with the sign inside, "— — •"
-/// over "• —", in lines. A 16 × 16 pt canvas with the glyph in the middle 14 × 14 pt, lines of 1.5 pt (3 px on Retina,
-/// rows on whole pixels) with round ends and joins, only the dots filled.
+/// over "• —", in lines. The glyph is 14 × 14 pt, drawn on a 16 pt square; the image is 16 pt high and 15 pt wide, as in
+/// every app of the family, with the glyph in the middle. Lines of 1.5 pt (3 px on Retina, the rows and the outline on
+/// whole pixels) with round ends and joins, only the dots filled.
 enum WorkGlyph {
     enum Face: Hashable {
         /// So many marks typed; a fraction grows the next dash.
@@ -220,9 +221,13 @@ enum WorkGlyph {
     /// One image per face: the menu bar keeps a drawn image, so a face that comes back costs nothing.
     @MainActor private static var images: [Face: NSImage] = [:]
 
+    /// The width of the image in the menu bar, the same in every app of the family: half a point beside the glyph.
+    static let width: CGFloat = 15
+
     @MainActor static func image(_ face: Face) -> NSImage {
         if let image = images[face] { return image }
-        let image = NSImage(size: NSSize(width: 16, height: 16), flipped: true) { _ in
+        let image = NSImage(size: NSSize(width: width, height: 16), flipped: true) { _ in
+            NSGraphicsContext.current?.cgContext.translateBy(x: (width - 16) / 2, y: 0)
             draw(face)
             return true
         }

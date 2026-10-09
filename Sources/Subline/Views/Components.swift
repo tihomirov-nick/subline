@@ -19,6 +19,28 @@ extension RGBAColor {
     var color: Color { Color(.sRGB, red: r, green: g, blue: b, opacity: a) }
 }
 
+extension RGBAColor {
+    /// The color in words for VoiceOver: the nearest common name and the code, with the opacity when it is not full.
+    var spokenName: String {
+        let names: [(String, RGBAColor)] = [
+            (L("белый"), RGBAColor(r: 1, g: 1, b: 1)), (L("чёрный"), RGBAColor(r: 0, g: 0, b: 0)),
+            (L("серый"), RGBAColor(r: 0.5, g: 0.5, b: 0.5)), (L("красный"), RGBAColor(r: 1, g: 0.18, b: 0.2)),
+            (L("оранжевый"), RGBAColor(r: 1, g: 0.55, b: 0)), (L("жёлтый"), RGBAColor(r: 1, g: 0.84, b: 0.04)),
+            (L("зелёный"), RGBAColor(r: 0.2, g: 0.78, b: 0.35)), (L("голубой"), RGBAColor(r: 0.35, g: 0.78, b: 0.98)),
+            (L("синий"), RGBAColor(r: 0, g: 0.35, b: 1)), (L("фиолетовый"), RGBAColor(r: 0.65, g: 0.3, b: 0.87)),
+            (L("розовый"), RGBAColor(r: 1, g: 0.4, b: 0.7)),
+        ]
+        func distance(_ other: RGBAColor) -> Double {
+            let dr = r - other.r, dg = g - other.g, db = b - other.b
+            return dr * dr + dg * dg + db * db
+        }
+        let name = names.min { distance($0.1) < distance($1.1) }?.0 ?? ""
+        let code = String(format: "#%02X%02X%02X", Int((r * 255).rounded()), Int((g * 255).rounded()), Int((b * 255).rounded()))
+        let base = "\(name), \(code)"
+        return a < 0.995 ? L("%@, непрозрачность %@%%", base, "\(Int((a * 100).rounded()))") : base
+    }
+}
+
 func colorBinding(_ binding: Binding<RGBAColor>) -> Binding<Color> {
     Binding(get: { binding.wrappedValue.color }, set: { binding.wrappedValue = RGBAColor($0) })
 }
@@ -51,6 +73,7 @@ struct FontFamilyPicker: View {
                     Circle()
                         .fill(Palette.attention)
                         .frame(width: 7, height: 7)
+                        .accessibilityHidden(true)
                 }
                 Spacer(minLength: 4)
                 Image(systemName: "chevron.up.chevron.down")
@@ -66,6 +89,8 @@ struct FontFamilyPicker: View {
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.12), value: hovering)
         .help(warning ?? L("Выбрать шрифт"))
+        .accessibilityLabel(L("Шрифт"))
+        .accessibilityValue(warning.map { "\(family). \($0)" } ?? family)
         .popover(isPresented: $isPresented, arrowEdge: .leading) {
             FontListPopover(family: $family, search: $search, isPresented: $isPresented, fontsVersion: fontsVersion)
         }
@@ -162,25 +187,35 @@ private struct FontRow: View {
 
 // MARK: - Time
 
-/// Editable time value "m:ss.cc".
+/// Editable time value in the format of the video ("0:12.48", or "0:00:12.48" for an hour or longer), as wide as the
+/// longest time of that format.
 struct TimeField: View {
     let value: Double
+    var format = ClockFormat(duration: 0)
+    /// What the time is, for VoiceOver ("Начало", "Конец").
+    var label = ""
     var highlighted = false
     var onBeginEditing: (() -> Void)?
     let onCommit: (Double) -> Void
     @State private var text = ""
     @FocusState private var focused: Bool
 
+    static let fontSize: CGFloat = 11
+
     var body: some View {
         TextField("", text: $text)
             .textFieldStyle(.plain)
-            .font(.system(size: 11, weight: .medium).monospacedDigit())
+            .font(.system(size: Self.fontSize, weight: .medium).monospacedDigit())
             .foregroundStyle(highlighted ? Color.white : Palette.secondary)
-            .frame(width: 54)
+            .frame(width: format.width(size: Self.fontSize, weight: .medium))
             .focused($focused)
-            .onAppear { text = Self.format(value) }
+            .accessibilityLabel(label)
+            .onAppear { text = format.string(value) }
             .onChange(of: value) { newValue in
-                if !focused { text = Self.format(newValue) }
+                if !focused { text = format.string(newValue) }
+            }
+            .onChange(of: format) { newFormat in
+                if !focused { text = newFormat.string(value) }
             }
             .onChange(of: focused) { isFocused in
                 if isFocused { onBeginEditing?() } else { commit() }
@@ -192,12 +227,15 @@ struct TimeField: View {
         if let parsed = parseTimecode(text), abs(parsed - value) > 0.0005 {
             onCommit(parsed)
         } else {
-            text = Self.format(value)
+            text = format.string(value)
         }
     }
+}
 
-    static func format(_ seconds: Double) -> String {
-        let total = Int((max(0, seconds) * 100).rounded())
-        return String(format: "%d:%02d.%02d", total / 6000, (total / 100) % 60, total % 100)
+extension ClockFormat {
+    /// The width of the longest time of this format in the monospaced digits of the system font.
+    func width(size: CGFloat, weight: NSFont.Weight) -> CGFloat {
+        let font = NSFont.monospacedDigitSystemFont(ofSize: size, weight: weight)
+        return ceil((widest as NSString).size(withAttributes: [.font: font]).width) + 3
     }
 }

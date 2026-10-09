@@ -112,6 +112,18 @@ public enum WhisperEngine {
         ("zh", L("Китайский")), ("ja", L("Японский")), ("ko", L("Корейский")), ("ar", L("Арабский")), ("he", L("Иврит")),
     ]
 
+    /// The language of speech before the person picks one: Russian with the Russian interface; otherwise the first
+    /// language of the Mac when the models know it (English for English, German for German), else detection.
+    public static func defaultLanguage(interface: String, preferredLanguages: [String]) -> String {
+        if interface == "ru" { return "ru" }
+        let codes = Set(languages.map(\.code))
+        if let first = preferredLanguages.first {
+            let code = String(first.prefix { $0 != "-" && $0 != "_" }).lowercased()
+            if codes.contains(code), code != "auto" { return code }
+        }
+        return "auto"
+    }
+
     private final class Callbacks {
         let progress: (Double) -> Void
         let isCancelled: () -> Bool

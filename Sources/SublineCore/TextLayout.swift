@@ -59,6 +59,21 @@ public final class LayoutStyle {
         max(40 * scale, CGFloat(preset.maxWidth) * canvas.width - 2 * outline - 2 * boxPadH)
     }
 
+    /// A word as it is drawn: the case and punctuation mode, then capitals when the style asks for them.
+    public func displayText(_ word: String) -> String {
+        let display = TextTransformer.apply(word, mode: preset.caseMode)
+        return preset.uppercase ? display.uppercased(with: Locale(identifier: "ru_RU")) : display
+    }
+
+    /// Room around a word for its highlight plate (zero without the plate on the sides).
+    public var highlightInsets: CGSize {
+        let size = CTFontGetSize(font)
+        return CGSize(width: size * 0.16 + outline, height: size * 0.1 + outline)
+    }
+
+    /// The plate's room on each side of a word, as the renderer leaves it between words.
+    var highlightPad: CGFloat { preset.highlightEnabled ? highlightInsets.width : 0 }
+
     public func attributedString(_ text: String) -> CFAttributedString {
         var attributes: [CFString: Any] = [kCTFontAttributeName: font]
         if kern != 0 {

@@ -14,13 +14,22 @@ public enum CueBuilder {
         let width: CGFloat
     }
 
-    public static func build(words: [Word], style: LayoutStyle, mediaDuration: Double? = nil) -> [Cue] {
+    /// `isCancelled` is asked now and then: a long transcript is cut in the background, and a newer cut can replace it.
+    /// A cancelled cut returns no subtitles.
+    public static func build(words: [Word], style: LayoutStyle, mediaDuration: Double? = nil,
+                             isCancelled: () -> Bool = { false }) -> [Cue] {
         let preset = style.preset
-        let items: [Item] = words.compactMap { word in
-            let display = TextTransformer.apply(word.text, mode: preset.caseMode)
-            guard !display.isEmpty else { return nil }
+        // Words are measured as the renderer draws them (capitals, highlight plates), so a subtitle built for one line
+        // is drawn on one line.
+        let pad = style.highlightPad
+        var items: [Item] = []
+        items.reserveCapacity(words.count)
+        for (index, word) in words.enumerated() {
+            if index % 512 == 511, isCancelled() { return [] }
+            let display = style.displayText(word.text)
+            guard !display.isEmpty else { continue }
             let raw = word.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            return Item(raw: raw, start: word.start, end: max(word.end, word.start), width: style.width(display))
+            items.append(Item(raw: raw, start: word.start, end: max(word.end, word.start), width: style.width(display) + 2 * pad))
         }
         let n = items.count
         guard n > 0 else { return [] }
@@ -53,6 +62,7 @@ public enum CueBuilder {
         var previous = [Int](repeating: -1, count: n + 1)
         best[0] = 0
         for i in 0..<n where best[i].isFinite {
+            if i % 256 == 0, isCancelled() { return [] }
             var insidePenalty = 0.0
             for j in (i + 1)...n {
                 let count = j - i

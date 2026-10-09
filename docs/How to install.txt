@@ -2,8 +2,12 @@ SUBLINE
 =======
 
 INSTALLING
-1. Drag the Subline icon onto the Applications folder next to it.
-2. Open the Applications folder in Finder and launch Subline.
+Open Subline right from this window. It moves itself to the Applications
+folder and restarts from there. Without administrator rights, Subline goes
+to the Applications folder inside your home folder.
+
+You can also install Subline by hand. Drag its icon onto the Applications
+folder next to it and launch Subline from the Applications folder.
 
 IF macOS WON'T OPEN THE APP
 The app isn't notarized by Apple, so on the first launch macOS may show
@@ -17,7 +21,8 @@ of malware"). You only need to allow it once.
   • On macOS 13–14, right-click Subline in Finder, choose "Open", then click
     "Open" again in the warning.
 
-  • If that didn't help, open Terminal and run:
+  • If that didn't help, drag Subline onto the Applications folder, open
+    Terminal and run:
         xattr -dr com.apple.quarantine /Applications/Subline.app
 
 FIRST LAUNCH
@@ -74,14 +79,19 @@ PLAYBACK AND SHORTCUTS
   ← / → ............. one frame back / forward
   ⇧← / ⇧→ ........... one second back / forward
   ↑ / ↓ ............. previous / next subtitle
-  ⌘B ................ split the subtitle at the playhead
+  Return or Esc ..... finish editing the text
+  ⌘B ................ split the subtitle at the text cursor or the playhead
+  ⌘J ................ merge the subtitle with the next one
+  ⌥⌘↑ / ⌥⌘↓ ......... move a word to the previous / next subtitle
   ⌘G ................ group the selected subtitles
   ⌥⌘C / ⌥⌘V ......... copy / paste style
   Esc ............... back to "All subtitles"
   ⌘Z / ⇧⌘Z .......... undo / redo
+  ⌘S ................ save the edits
   ⌘E ................ save the video with subtitles
   ⌥⌘I ............... show / hide the style panel
   ⌘, ................ settings (language, sounds, menu bar icon, updates)
+  ⌘? ................ Subline Help
 
 PRESETS
 You can share presets with colleagues. Open the "…" menu next to the preset
@@ -94,8 +104,7 @@ the new version and restarts Subline, "Later" hides the card until the next
 check, "Skip" stops offering this version. An update doesn't install while
 speech is recognized or a video is exported. To check by hand, choose "Check
 for Updates…" in the Subline menu; the "Check for updates" switch in Settings
-(⌘,) turns the automatic checks off. Subline can't replace a copy launched
-right from the DMG or from Downloads, so keep the app in Applications.
+(⌘,) turns the automatic checks off.
 
 REQUIREMENTS
 macOS 13.3 or later. Subline is fastest on Macs with Apple Silicon (M1 and

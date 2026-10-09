@@ -68,48 +68,61 @@ struct SidebarView: View {
 private struct RecognitionPanel: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var modelStore: ModelStore
+    @FocusState private var promptFocused: Bool
 
     var body: some View {
         VStack(spacing: 10) {
             VStack(spacing: 0) {
-                Row(title: L("Модель")) {
-                    ValueMenu(value: modelTitle) {
-                        modelStore.availableModelIDs.map { id in
-                            .item(shortName(id), checked: id == model.modelID) { model.modelID = id }
-                        } + [.separator, .item(L("Другие модели…")) { model.showModelManager = true }]
-                    }
+                MenuRow(title: L("Модель"), value: modelTitle) {
+                    modelStore.availableModelIDs.map { id in
+                        .item(shortName(id), checked: id == model.modelID) { model.modelID = id }
+                    } + [.separator, .item(L("Другие модели…")) { model.showModelManager = true }]
                 }
                 Separator()
-                Row(title: L("Язык"), help: L("Язык речи в видео")) {
-                    ValueMenu(value: WhisperEngine.languages.first { $0.code == model.language }?.name ?? model.language) {
-                        WhisperEngine.languages.map { language in
-                            .item(language.name, checked: language.code == model.language) { model.language = language.code }
-                        }
+                MenuRow(title: L("Язык"), help: L("Язык речи в видео"),
+                        value: WhisperEngine.languages.first { $0.code == model.language }?.name ?? model.language) {
+                    WhisperEngine.languages.map { language in
+                        .item(language.name, checked: language.code == model.language) { model.language = language.code }
                     }
                 }
                 Separator()
                 Row(title: L("Подсказка"), help: L("Слова из видео, которые модель должна написать правильно: имена, названия, термины")) {
-                    TextField(L("Имена и термины"), text: $model.prompt)
+                    TextField("", text: $model.prompt)
                         .textFieldStyle(.plain)
                         .font(.system(size: 12.5))
                         .multilineTextAlignment(.trailing)
                         .frame(maxWidth: .infinity)
+                        .focused($promptFocused)
+                        // A placeholder of our own: the system one is too faint on black.
+                        .overlay(alignment: .trailing) {
+                            if model.prompt.isEmpty {
+                                Text(L("Имена и термины"))
+                                    .font(.system(size: 12.5))
+                                    .foregroundStyle(Palette.placeholder)
+                                    .lineLimit(1)
+                                    .allowsHitTesting(false)
+                                    .accessibilityHidden(true)
+                            }
+                        }
+                        .accessibilityLabel(L("Подсказка"))
+                        .accessibilityHint(L("Слова из видео, которые модель должна написать правильно: имена, названия, термины"))
                 }
+                // A click on the name of the row starts typing as well.
+                .onTapGesture { promptFocused = true }
                 Separator()
-                Row(title: L("Сразу после открытия"), help: L("Распознавать речь, как только откроется видео")) {
-                    Switch(isOn: $model.autoTranscribe)
-                }
+                SwitchRow(title: L("Распознавать сразу"), help: L("Распознавать речь, как только откроется видео"),
+                          isOn: $model.autoTranscribe)
             }
             .card()
             HStack(spacing: 8) {
                 Button {
-                    model.startTranscription()
+                    model.requestTranscription()
                 } label: {
                     Text(buttonTitle)
                         .frame(maxWidth: .infinity)
                 }
                 .appButton(.primary)
-                .disabled(model.media == nil || model.isBusy || model.updateInProgress)
+                .disabled(!model.canTranscribe)
                 .help(buttonHelp)
                 Button(L("Модели")) {
                     model.showModelManager = true
@@ -241,7 +254,7 @@ private struct SubtitlesHeader: View {
                 MenuIconButton(help: L("Действия с субтитрами"), size: 24) {
                     [
                         .item(L("Сгруппировать выбранные"), enabled: !model.scopeCueIDs.isEmpty) { model.createGroup() },
-                        .item(L("Разделить субтитр по курсору"), enabled: model.currentCue != nil) { model.splitCurrentCue() },
+                        .item(L("Разделить субтитр"), enabled: model.canSplit(model.targetCueID)) { model.splitCurrentCue() },
                         .separator,
                         .item(L("Пересобрать по пресету")) { model.rebuildCues() },
                     ]
@@ -291,6 +304,7 @@ private struct EmptyState: View {
             symbol(transcribing)
                 .frame(width: 52, height: 52)
                 .background(Circle().fill(Palette.card))
+                .accessibilityHidden(true)
             Text(text(transcribing))
                 .font(.system(size: 12.5))
                 .foregroundStyle(Palette.secondary)
@@ -313,9 +327,10 @@ private struct EmptyState: View {
         }
     }
 
+    /// Before a video the steps are in the middle of the window, so the list only says what will be here.
     private func text(_ transcribing: Bool) -> String {
         if transcribing { return L("Распознаю речь…") }
-        if model.mediaURL == nil { return L("Откройте видео") }
+        if model.mediaURL == nil { return L("Здесь появятся субтитры") }
         if model.transcript != nil { return L("Речь не найдена") }
         return L("Нажмите «Распознать речь»")
     }
@@ -428,7 +443,7 @@ private struct GroupsBar: View {
                 .buttonStyle(PressStyle())
                 .disabled(model.scopeCueIDs.isEmpty)
                 .opacity(model.scopeCueIDs.isEmpty ? 0.45 : 1)
-                .help(L("Объединить выбранные субтитры (или тот, что под курсором) в группу с общим стилем (⌘G)"))
+                .help(L("Объединить выбранные субтитры (или тот, что на текущем кадре) в группу с общим стилем (⌘G)"))
             }
             .padding(2)
         }
@@ -451,6 +466,7 @@ private struct GroupsBar: View {
                 Circle()
                     .fill(group.color.color)
                     .frame(width: 7, height: 7)
+                    .accessibilityHidden(true)
                 Text(group.name)
                     .font(.system(size: 11.5, weight: .medium))
                     .lineLimit(1)
@@ -466,6 +482,9 @@ private struct GroupsBar: View {
         }
         .buttonStyle(PressStyle())
         .help(L("Стиль группы «%@»", "\(group.name)"))
+        .accessibilityLabel(L("Группа «%@»", "\(group.name)"))
+        .accessibilityValue(L("Субтитров: %@", "\(model.cueCount(inGroup: group.id))"))
+        .accessibilityAddTraits(selected ? .isSelected : [])
         .contextMenu {
             Button(L("Переименовать…")) {
                 newName = group.name
@@ -515,79 +534,178 @@ private struct CueList: View {
                 guard let id else { return }
                 proxy.scrollTo(id, anchor: .center)
             }
+            .onChange(of: model.textFocusRequest) { id in
+                // Tab: the next subtitle comes into view, its text takes the typing.
+                guard let id else { return }
+                proxy.scrollTo(id, anchor: .center)
+            }
         }
     }
 }
 
-/// One subtitle: timing on top, editable text below. The subtitle under the playhead has a white bar and a brighter
-/// start time; selected subtitles are lighter.
-private struct CueRow: View {
+/// One subtitle: timing on top, its text below, typed right in place. The subtitle under the playhead has a white bar
+/// and a brighter start time; selected subtitles are lighter. While its text is typed in, the row has a white outline
+/// and a "Done" button with the Esc key under the text.
+struct CueRow: View {
     @EnvironmentObject var model: AppModel
     let cue: Cue
     let isCurrent: Bool
     let isSelected: Bool
     let group: SubtitleGroup?
     @State private var hovering = false
-    @FocusState private var editing: Bool
 
     var body: some View {
+        let editing = model.editingCueID == cue.id
+        let fit = model.lineFit(for: cue)
+        let active = hovering || isCurrent || isSelected || editing
+        let clock = model.clockFormat
         HStack(alignment: .top, spacing: 8) {
+            // The group is said in words too (VoiceOver, the tooltip): the color alone does not carry it.
             Capsule()
                 .fill(group?.color.color ?? (isCurrent ? Color.white : Color.clear))
                 .frame(width: 3)
                 .padding(.vertical, 2)
                 .help(group.map { L("Группа «%@»", "\($0.name)") } ?? "")
-            VStack(alignment: .leading, spacing: 3) {
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 3) {
-                    TimeField(value: cue.start, highlighted: isCurrent,
+                    TimeField(value: cue.start, format: clock, label: L("Начало"), highlighted: isCurrent,
                               onBeginEditing: { model.select(cue) }) { model.updateCueTiming(cue.id, start: $0) }
                     Image(systemName: "arrow.right")
                         .font(.system(size: 7.5, weight: .bold))
                         .foregroundStyle(Palette.tertiary)
-                    TimeField(value: cue.end, onBeginEditing: { model.select(cue) }) { model.updateCueTiming(cue.id, end: $0) }
+                        .accessibilityHidden(true)
+                    TimeField(value: cue.end, format: clock, label: L("Конец"),
+                              onBeginEditing: { model.select(cue) }) { model.updateCueTiming(cue.id, end: $0) }
                     if cue.hasCustomStyle {
                         Image(systemName: "paintbrush.pointed.fill")
                             .font(.system(size: 9))
                             .foregroundStyle(Palette.secondary)
                             .help(L("У субтитра свой стиль"))
+                            .accessibilityLabel(L("У субтитра свой стиль"))
                     }
                     Spacer(minLength: 0)
-                    MenuIconButton(help: L("Действия с субтитром"), size: 20, filled: false) { entries }
-                        .opacity(hovering || isCurrent || isSelected ? 1 : 0)
+                    HStack(spacing: 0) {
+                        // Moving words shows on the row being worked with; the ⋯ menu is always there, quietly.
+                        Group {
+                            IconButton(symbol: "arrow.up.to.line", help: L("Первое слово в предыдущий субтитр (⌥⌘↑)"),
+                                       size: 20, filled: false) {
+                                model.moveFirstWordToPrevious(cue.id)
+                            }
+                            .disabled(!model.canMoveFirstWordToPrevious(cue.id))
+                            IconButton(symbol: "arrow.down.to.line", help: L("Последнее слово в следующий субтитр (⌥⌘↓)"),
+                                       size: 20, filled: false) {
+                                model.moveLastWordToNext(cue.id)
+                            }
+                            .disabled(!model.canMoveLastWordToNext(cue.id))
+                        }
+                        .opacity(active ? 1 : 0)
+                        .allowsHitTesting(active)
+                        .accessibilityHidden(!active)
+                        MenuIconButton(help: L("Действия с субтитром"), size: 20, filled: false) { entries }
+                            .opacity(active ? 1 : 0.45)
+                    }
                 }
-                TextField(L("Текст субтитра"), text: Binding(get: { cue.text }, set: { model.updateCueText(cue.id, $0) }), axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 13.5))
-                    .lineLimit(1...6)
-                    .focused($editing)
+                CueTextEditor(cueID: cue.id, text: cue.text, allowsLineBreaks: fit.maxLines > 1,
+                              menuEntries: { textMenuEntries },
+                              onBegin: { model.beginTextEditing(cue) },
+                              onChange: { model.editCueText(cue.id, $0) },
+                              onCaret: { offset in
+                                  model.textCaret = TextCaret(cueID: cue.id, offset: offset, text: model.cues.first { $0.id == cue.id }?.text ?? cue.text,
+                                                              time: Date())
+                              },
+                              onEnd: { model.endTextEditing(cue.id) },
+                              onTab: { forward in model.editText(after: cue.id, forward: forward) },
+                              focusRequested: model.textFocusRequest == cue.id,
+                              onFocusTaken: { if model.textFocusRequest == cue.id { model.textFocusRequest = nil } })
+                    .overlay(alignment: .topLeading) {
+                        if cue.text.isEmpty {
+                            Text(L("Текст субтитра"))
+                                .font(.system(size: 13.5))
+                                .foregroundStyle(Palette.placeholder)
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(true)
+                        }
+                    }
+                if fit.overflows {
+                    OverflowNote(fit: fit) { model.splitToFit(cue.id) }
+                }
+                if editing {
+                    EditingHint(allowsLineBreaks: fit.maxLines > 1) { model.finishTextEditing() }
+                        .transition(.opacity)
+                }
             }
         }
         .padding(.leading, 6)
         .padding(.trailing, 8)
         .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(background))
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(background(editing)))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.white.opacity(editing ? 0.7 : 0), lineWidth: 1.5)
+        )
         .contentShape(Rectangle())
         .onTapGesture {
             model.clickRow(cue, modifiers: NSEvent.modifierFlags)
         }
+        .contextMenu { MenuEntriesView(entries: entries) }
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.12), value: hovering)
-        .onChange(of: editing) { isEditing in
-            // Clicking into the text also goes to the start of the subtitle and pauses, so it stays on screen.
-            if isEditing { model.select(cue) }
+        .animation(.easeOut(duration: 0.15), value: editing)
+        // VoiceOver: the row says its times, group and state, and offers the commands of the ⋯ menu.
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(accessibilityTitle(clock))
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityActions {
+            ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
+                if entry.kind == .item, entry.children.isEmpty, entry.enabled, let action = entry.action {
+                    Button(entry.title, action: action)
+                }
+            }
         }
     }
 
-    private var background: Color {
+    private func accessibilityTitle(_ clock: ClockFormat) -> String {
+        var parts = [L("Субтитр с %@ до %@", clock.string(cue.start), clock.string(cue.end))]
+        if let group { parts.append(L("Группа «%@»", "\(group.name)")) }
+        if isCurrent { parts.append(L("на текущем кадре")) }
+        return parts.joined(separator: ", ")
+    }
+
+    private func background(_ editing: Bool) -> Color {
+        if editing { return Color.white.opacity(0.1) }
         if isSelected { return Color.white.opacity(0.15) }
         if isCurrent { return Color.white.opacity(0.08) }
         return Color.white.opacity(hovering ? 0.04 : 0)
     }
 
+    /// Moving words and cutting: in the ⋯ menu, the right-click menu of the row and the menu of the text. A cut goes
+    /// at the text caret while the text is typed in, else at the playhead inside the subtitle, else where both halves
+    /// fit best.
+    private func wordEntries(atCaret: Bool) -> [MenuEntry] {
+        [
+            .item(L("Перенести первое слово в предыдущий субтитр"), enabled: model.canMoveFirstWordToPrevious(cue.id)) {
+                model.moveFirstWordToPrevious(cue.id)
+            },
+            .item(L("Перенести последнее слово в следующий субтитр"), enabled: model.canMoveLastWordToNext(cue.id)) {
+                model.moveLastWordToNext(cue.id)
+            },
+            .item(atCaret ? L("Разделить по текстовому курсору") : L("Разделить субтитр"), enabled: model.canSplit(cue.id)) {
+                model.splitCue(cue.id)
+            },
+            .item(L("Объединить со следующим"), enabled: model.canMergeWithNext(cue.id)) { model.mergeWithNext(cue.id) },
+        ]
+    }
+
+    /// The menu of the text is built on the right click, while typing goes on.
+    private var textMenuEntries: [MenuEntry] {
+        wordEntries(atCaret: model.editingCueID == cue.id)
+    }
+
     private var entries: [MenuEntry] {
-        var items: [MenuEntry] = [
-            .item(L("Перейти к началу")) { model.select(cue, keepPlaying: true) },
-            .item(L("Объединить со следующим")) { model.mergeWithNext(cue.id) },
+        var items: [MenuEntry] = [.item(L("Перейти к началу")) { model.select(cue, keepPlaying: true) }]
+        items += wordEntries(atCaret: false)
+        items += [
             .item(L("Добавить субтитр после")) { model.insertCue(after: cue.id) },
             .separator,
             .item(L("Новая группа из выбранных")) {
@@ -616,5 +734,114 @@ private struct CueRow: View {
         }
         items += [.separator, .item(L("Удалить")) { model.deleteCue(cue.id) }]
         return items
+    }
+}
+
+/// The text is longer than the lines of the style allow: said plainly under it, with the way out.
+struct OverflowNote: View {
+    let fit: LineFit
+    let split: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 10.5, weight: .semibold))
+            Text(Self.title(fit))
+                .font(.system(size: 11.5, weight: .medium))
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+            Spacer(minLength: 4)
+            Button(L("Разделить"), action: split)
+                .appButton(.secondary)
+                .controlSize(.mini)
+                .help(L("Разделить субтитр на два, каждый в заданное число строк. Время поделится по словам"))
+        }
+        .foregroundStyle(Palette.attention)
+        .help(Self.help(fit))
+    }
+
+    static func title(_ fit: LineFit) -> String {
+        switch fit.maxLines {
+        case 1: return L("Не помещается в одну строку")
+        case 2: return L("Не помещается в две строки")
+        default: return L("Не помещается в три строки")
+        }
+    }
+
+    /// The same over the video.
+    static func pillTitle(_ fit: LineFit) -> String {
+        switch fit.maxLines {
+        case 1: return L("Субтитр не помещается в одну строку")
+        case 2: return L("Субтитр не помещается в две строки")
+        default: return L("Субтитр не помещается в три строки")
+        }
+    }
+
+    static func help(_ fit: LineFit) -> String {
+        L("При этом шрифте и ширине блока текст не умещается в заданные строки, и в видео он займёт больше строк. Разделите субтитр на два или сократите текст")
+    }
+}
+
+/// Under the text being typed: how to finish, and a button that does it.
+private struct EditingHint: View {
+    let allowsLineBreaks: Bool
+    let done: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Button(action: done) {
+                HStack(spacing: 5) {
+                    Text(L("Готово"))
+                        .font(.system(size: 11, weight: .semibold))
+                    Text(verbatim: "esc")
+                        .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(RoundedRectangle(cornerRadius: 4, style: .continuous).strokeBorder(Color.black.opacity(0.35)))
+                        .accessibilityHidden(true)
+                }
+                .foregroundStyle(.black)
+                .padding(.leading, 9)
+                .padding(.trailing, 5)
+                .frame(height: 20)
+                .background(Capsule().fill(Brand.mark))
+                // The click target is taller than the capsule.
+                .frame(minHeight: 24)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PressStyle(scale: 0.94))
+            .accessibilityLabel(L("Готово"))
+            Text(allowsLineBreaks ? L("или Return. Новая строка: ⌥Return") : L("или Return"))
+                .font(.system(size: 10.5))
+                .foregroundStyle(Palette.tertiary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            Spacer(minLength: 0)
+        }
+        .help(L("Правка заканчивается клавишей Esc или Return и щелчком мимо текста, набранное остаётся, и пробел снова запускает видео. Tab переходит к тексту следующего субтитра"))
+    }
+}
+
+/// Menu entries as SwiftUI menu items (for right-click menus).
+struct MenuEntriesView: View {
+    let entries: [MenuEntry]
+
+    var body: some View {
+        ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
+            switch entry.kind {
+            case .separator:
+                Divider()
+            case .header:
+                Text(entry.title)
+            case .item:
+                if entry.children.isEmpty {
+                    Button(entry.title) { entry.action?() }
+                        .disabled(!entry.enabled)
+                } else {
+                    Menu(entry.title) { MenuEntriesView(entries: entry.children) }
+                        .disabled(!entry.enabled)
+                }
+            }
+        }
     }
 }

@@ -122,7 +122,10 @@ final class PlayerController: ObservableObject {
     }
 
     private func loadPlaybackCopy(_ info: MediaInfo) async {
-        let destination = AppPaths.proxiesDir.appendingPathComponent((TranscriptCache.key(for: info.url) ?? UUID().uuidString) + ".mp4")
+        // The key reads both ends of the file: off the main thread, a network disk can be slow.
+        let url = info.url
+        let key = await Task.detached(priority: .utility) { TranscriptCache.key(for: url) }.value
+        let destination = AppPaths.proxiesDir.appendingPathComponent((key ?? UUID().uuidString) + ".mp4")
         if !FileManager.default.fileExists(atPath: destination.path) {
             copyProgress = 0
             let partial = destination.deletingPathExtension().appendingPathExtension("part.mp4")

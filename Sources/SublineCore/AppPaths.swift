@@ -11,6 +11,10 @@ public enum AppPaths {
     /// transcripts move with it. The old name stays as a link to the new folder, for apps that still look for the
     /// shared Whisper models in Subtits/Models (older Slovo).
     private static let supportURL: URL = {
+        // Tests keep their presets, saved subtitles and models apart from the real ones.
+        if let path = ProcessInfo.processInfo.environment["SUBLINE_SUPPORT_DIR"], !path.isEmpty {
+            return URL(fileURLWithPath: path, isDirectory: true)
+        }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let url = base.appendingPathComponent(appName, isDirectory: true)
         let old = base.appendingPathComponent(FormerName.folderName, isDirectory: true)

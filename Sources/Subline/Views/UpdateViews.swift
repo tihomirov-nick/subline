@@ -8,13 +8,13 @@ extension Updater.Failure {
     /// One line under the update.
     var text: String {
         switch self {
-        case .offline: return L("Нет связи с GitHub")
-        case .rateLimited: return L("GitHub ограничил запросы")
-        case .noInstaller: return L("В релизе нет установщика")
-        case .download: return L("Загрузка прервалась")
+        case .offline: return L("Нет связи с сервером обновлений")
+        case .rateLimited: return L("Сервер обновлений просит подождать")
+        case .noInstaller: return L("Установщика новой версии пока нет")
+        case .download: return L("Скачивание прервалось")
         case .damaged: return L("Установщик повреждён")
-        case .notTrusted: return L("Подпись не совпадает")
-        case .cannotReplace: return L("Не удалось заменить Subline")
+        case .notTrusted: return L("Новая версия подписана иначе")
+        case .cannotReplace: return L("Не получилось поставить новую версию")
         }
     }
 
@@ -22,14 +22,14 @@ extension Updater.Failure {
     var help: String {
         switch self {
         case .offline: return L("Проверьте интернет и попробуйте ещё раз")
-        case .rateLimited: return L("С этого адреса было слишком много запросов к GitHub. Попробуйте через час")
-        case .noInstaller: return L("К новой версии не приложен DMG. Скачайте его позже со страницы релиза")
-        case .download: return L("Загрузка не закончилась. Попробуйте ещё раз или скачайте DMG со страницы релиза")
-        case .damaged: return L("Скачанный DMG не совпадает с релизом или в нём нет новой версии Subline")
+        case .rateLimited: return L("Слишком много проверок подряд. Попробуйте через час")
+        case .noInstaller: return L("Новая версия вышла, но её установщик ещё не выложен. Попробуйте позже")
+        case .download: return L("Скачивание не закончилось. Попробуйте ещё раз или скачайте установщик со страницы загрузки")
+        case .damaged: return L("Скачанный установщик повреждён или в нём нет новой версии Subline. Попробуйте ещё раз")
         case .notTrusted:
-            return L("Новая версия подписана не так, как установленная, поэтому сама она не ставится. Скачайте DMG со страницы релиза и перетащите Subline в папку «Программы»")
+            return L("Новая версия подписана не так, как установленная, и сама не ставится. Скачайте установщик со страницы загрузки и перетащите Subline в папку «Программы»")
         case .cannotReplace:
-            return L("Subline открыт с диска только для чтения или из папки без права записи. Перетащите Subline из открытого DMG в папку «Программы»")
+            return L("Не получилось поставить новую версию. Откройте установщик и перетащите Subline в папку «Программы»")
         }
     }
 }
@@ -42,7 +42,7 @@ extension Updater {
         case .checking: return L("Проверяю…")
         case .upToDate: return L("Последняя версия")
         case .available(let release): return L("Доступна %@", "\(release.version)")
-        case .downloading(_, let progress): return L("Загрузка %@%%", "\(Int(progress * 100))")
+        case .downloading(_, let progress): return L("Скачивание %@%%", "\(Int(progress * 100))")
         case .installing: return L("Устанавливаю…")
         case .failed(let failure, _): return failure.text
         }
@@ -52,8 +52,8 @@ extension Updater {
         switch state {
         case .failed(let failure, _): return failure.help
         default:
-            return isDevelopmentBuild ? L("Сборка из исходников сама не проверяет обновления и не заменяет себя")
-                                      : L("Новые версии Subline берутся из релизов на GitHub")
+            return isDevelopmentBuild ? L("Эта сборка сделана из исходного кода и сама не обновляется")
+                                      : L("Subline сам проверяет, вышла ли новая версия, и предлагает её поставить")
         }
     }
 
@@ -90,8 +90,8 @@ enum ReleaseNotes {
 // MARK: - The card in the window
 
 /// The update at the bottom of the subtitles block: what is new and Update, Later, Skip; the progress with Cancel
-/// while it downloads; a short reason and the release page when it fails. Updating restarts Subline, so it waits
-/// until recognition and export are over.
+/// while it downloads; a short reason and the download page (or the downloaded installer) when it fails. Updating
+/// restarts Subline, so it waits until recognition and export are over.
 struct UpdateBanner: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var updater: Updater
@@ -177,10 +177,10 @@ struct UpdateBanner: View {
         case .installing, .checking:
             ProgressLine(value: nil)
         case .failed(let failure, _):
-            Button(failure == .cannotReplace ? L("Открыть DMG") : L("Страница релиза")) { updater.openReleasePage() }
+            Button(failure == .cannotReplace ? L("Открыть установщик") : L("Страница загрузки")) { updater.openReleasePage() }
                 .appButton(.secondary)
                 .controlSize(.small)
-                .help(failure == .cannotReplace ? L("Открыть скачанный DMG в Finder") : L("Открыть релиз на GitHub"))
+                .help(failure == .cannotReplace ? L("Показать скачанный установщик в Finder") : L("Открыть страницу загрузки в браузере"))
         case .idle, .upToDate:
             EmptyView()
         }
@@ -213,7 +213,7 @@ struct UpdateBanner: View {
     }
 
     private var updateHelp: String {
-        if updater.isDevelopmentBuild { return L("Сборка из исходников не заменяет себя. Установите Subline из DMG") }
+        if updater.isDevelopmentBuild { return L("Эта сборка сама не обновляется. Поставьте Subline из установщика") }
         if model.isBusy { return L("Обновление перезапустит Subline, поэтому оно станет доступно, когда закончится распознавание или экспорт") }
         return L("Скачать новую версию, установить её и перезапустить Subline")
     }
@@ -241,7 +241,7 @@ struct UpdateBanner: View {
         case .idle, .checking: return L("Проверяю обновления…")
         case .upToDate: return L("Установлена последняя версия")
         case .available(let release): return L("Доступна версия %@", "\(release.version)")
-        case .downloading(let release, _): return L("Загружаю версию %@", "\(release.version)")
+        case .downloading(let release, _): return L("Скачиваю версию %@", "\(release.version)")
         case .installing(let release): return L("Устанавливаю версию %@", "\(release.version)")
         case .failed(let failure, _): return failure.text
         }

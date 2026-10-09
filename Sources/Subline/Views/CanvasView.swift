@@ -7,6 +7,7 @@ struct CanvasArea: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject var player: PlayerController
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.fileIsDragged) private var fileIsDragged
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -24,11 +25,19 @@ struct CanvasArea: View {
                 .transition(.reveal(reduceMotion: reduceMotion))
             }
             .padding(Metrics.inset)
+            // Over the block, above the sample subtitle (it stays visible for designing a preset); while a file is
+            // dragged over the window the card makes way for the drop outline.
+            if model.mediaURL == nil && !fileIsDragged {
+                FirstSteps(modelStore: model.modelStore)
+                    .padding(.top, 28)
+                    .transition(.reveal(reduceMotion: reduceMotion))
+            }
             StatusHUD(player: player)
                 .padding(.top, Metrics.inset + 8)
                 .padding(.horizontal, Metrics.inset)
         }
         .animation(Motion.animation(Motion.island, reduceMotion: reduceMotion), value: model.hasMedia)
+        .animation(Motion.animation(Motion.quick, reduceMotion: reduceMotion), value: fileIsDragged)
     }
 }
 
@@ -90,6 +99,12 @@ struct SubtitleCanvas: View {
                         .offset(rubber)
                         .allowsHitTesting(false)
                 }
+                if model.isSampleCue, drag == nil, let rect = model.previewBlockGeometry()?.rect {
+                    SampleLabel()
+                        .position(x: rect.midX * scale, y: max(14, rect.minY * scale - 18))
+                        .offset(rubber)
+                        .allowsHitTesting(false)
+                }
                 selectionOverlay(scale: scale)
                 if drag != nil {
                     guides(size: fitted)
@@ -100,10 +115,6 @@ struct SubtitleCanvas: View {
                         .position(x: rect.midX * scale, y: rect.midY * scale)
                         .allowsHitTesting(false)
                         .transition(.opacity)
-                }
-                if model.mediaURL == nil {
-                    DropPrompt()
-                        .transition(.reveal(reduceMotion: reduceMotion))
                 }
             }
             .frame(width: fitted.width, height: fitted.height)
@@ -328,38 +339,110 @@ struct SubtitleCanvas: View {
     }
 }
 
-/// Before a video is opened: what to do, in the middle of the frame.
-private struct DropPrompt: View {
+/// The subtitle on the video before recognition is a sample to design the preset on: it says so.
+private struct SampleLabel: View {
+    var body: some View {
+        Text(L("Пример текста"))
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(Color.white.opacity(0.9))
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, 9)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(Color.black.opacity(0.7)))
+            .overlay(Capsule().strokeBorder(Color.white.opacity(0.18)))
+            .help(L("Так будут выглядеть субтитры с этим пресетом. Свои появятся после распознавания"))
+            .accessibilityLabel(L("Пример текста. Так будут выглядеть субтитры с этим пресетом"))
+    }
+}
+
+/// Before a video is opened: the three steps in their order (a model, a video, the export), in the middle of the frame.
+/// The step to take now is bright and has its button; until the model is there, nothing asks for a video.
+private struct FirstSteps: View {
     @EnvironmentObject var model: AppModel
+    @ObservedObject var modelStore: ModelStore
 
     var body: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "film.stack")
-                .font(.system(size: 22, weight: .medium))
-                .foregroundStyle(.white)
-                .frame(width: 52, height: 52)
-                .background(Circle().fill(Color.white.opacity(0.12)))
-                .padding(.bottom, 2)
-            Text(L("Перетащите видео"))
+        let hasModel = modelStore.hasAnyModel
+        let recommended = ModelCatalog.recommended
+        let download = modelStore.downloads[recommended.id]
+        VStack(alignment: .leading, spacing: 12) {
+            Text(L("Субтитры за три шага"))
                 .font(.system(size: 16, weight: .semibold))
                 .lineLimit(1)
-            Text(L("MP4, MOV, MKV, AVI, WEBM и другие"))
-                .font(.system(size: 11.5))
-                .foregroundStyle(Palette.secondary)
-                .lineLimit(1)
-            Button(L("Выбрать файл")) {
-                model.showOpenPanel()
+                .accessibilityAddTraits(.isHeader)
+            step(1, done: hasModel, current: !hasModel,
+                 title: L("Скачайте модель распознавания"),
+                 detail: hasModel ? L("Модель на месте, интернет больше не нужен")
+                                  : L("Один раз, %@. Потом распознавание работает без интернета", recommended.sizeText)) {
+                if let download {
+                    VStack(alignment: .leading, spacing: 5) {
+                        ProgressLine(value: download.verifying ? nil : download.fraction)
+                            .frame(width: 170)
+                        Text(download.verifying ? L("Проверяю файл…") : L("%@%% из %@", "\(Int(download.fraction * 100))", recommended.sizeText))
+                            .font(.system(size: 11).monospacedDigit())
+                            .foregroundStyle(Palette.secondary)
+                    }
+                } else {
+                    Button(L("Скачать модель")) { modelStore.download(recommended) }
+                        .appButton(.primary)
+                        .controlSize(.small)
+                }
             }
-            .appButton(.primary)
-            .keyboardShortcut(.defaultAction)
-            .padding(.top, 6)
+            step(2, done: false, current: hasModel,
+                 title: L("Откройте видео"),
+                 detail: L("Перетащите файл в окно или нажмите ⌘O. Подойдут MP4, MOV, MKV, WEBM и аудио")) {
+                // No Return shortcut: Return in a field of the style would open the panel. ⌘O opens it anywhere.
+                Button(L("Выбрать файл")) { model.showOpenPanel() }
+                    .appButton(.primary)
+                    .controlSize(.small)
+            }
+            step(3, done: false, current: false,
+                 title: L("Поправьте субтитры и нажмите «Экспорт»"),
+                 detail: L("Речь распознаётся сама, текст и время можно поправить в списке слева")) {
+                EmptyView()
+            }
         }
-        .padding(.horizontal, 22)
-        .padding(.top, 18)
-        .padding(.bottom, 16)
-        .background(RoundedRectangle(cornerRadius: 24, style: .continuous).fill(Color.black.opacity(0.78)))
-        .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(Color.white.opacity(0.08)))
+        .frame(width: 300, alignment: .leading)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 18)
+        .background(RoundedRectangle(cornerRadius: 24, style: .continuous).fill(Color.black.opacity(0.85)))
+        .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(Color.white.opacity(0.1)))
+        .shadow(color: .black.opacity(0.45), radius: 16, y: 6)
         .padding(Metrics.inset)
+    }
+
+    private func step<Action: View>(_ number: Int, done: Bool, current: Bool, title: String, detail: String,
+                                    @ViewBuilder action: () -> Action) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            ZStack {
+                Circle().fill(done || current ? Brand.mark : Color.white.opacity(0.14))
+                if done {
+                    Image(systemName: "checkmark").font(.system(size: 10, weight: .bold))
+                } else {
+                    Text("\(number)").font(.system(size: 11.5, weight: .bold).monospacedDigit())
+                }
+            }
+            .foregroundStyle(done || current ? Color.black : Color.white.opacity(0.8))
+            .frame(width: 22, height: 22)
+            .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(current || done ? Color.white : Color.white.opacity(0.7))
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(detail)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Palette.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if current {
+                    action()
+                        .padding(.top, 5)
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(L("Шаг %@: %@", "\(number)", title) + (done ? ", " + L("готово") : ""))
     }
 }
 
@@ -379,6 +462,12 @@ struct StatusHUD: View {
             } else if let notice = model.exportNotice {
                 NoticePill(notice: notice)
                     .transition(.reveal(reduceMotion: reduceMotion))
+            } else if let name = model.restoreNotice {
+                RestorePill(name: name)
+                    .transition(.reveal(reduceMotion: reduceMotion))
+            } else if !player.isPlaying, let cue = model.currentCue, model.lineFit(for: cue).overflows {
+                OverflowPill(cue: cue, fit: model.lineFit(for: cue))
+                    .transition(.reveal(reduceMotion: reduceMotion))
             }
             if let progress = player.copyProgress {
                 Pill {
@@ -394,7 +483,7 @@ struct StatusHUD: View {
                 Pill {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(Palette.attention)
-                    Text(L("Видео не проигрывается, но распознать и сохранить можно"))
+                    Text(L("Видео не проигрывается, но распознать и экспортировать можно"))
                         .font(.system(size: 12, weight: .medium))
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
@@ -404,6 +493,7 @@ struct StatusHUD: View {
         }
         .animation(Motion.animation(Motion.island, reduceMotion: reduceMotion), value: model.activity?.kind)
         .animation(Motion.animation(Motion.island, reduceMotion: reduceMotion), value: model.exportNotice)
+        .animation(Motion.animation(Motion.island, reduceMotion: reduceMotion), value: model.restoreNotice)
         .animation(Motion.animation(Motion.island, reduceMotion: reduceMotion), value: player.copyProgress == nil)
         .animation(Motion.animation(Motion.island, reduceMotion: reduceMotion), value: player.copyFailed)
     }
@@ -442,6 +532,7 @@ private struct ActivityPill: View {
                 .foregroundStyle(.black)
                 .frame(width: 26, height: 26)
                 .background(Circle().fill(Brand.mark))
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 6) {
                 Text(activity.title)
                     .font(.system(size: 12.5, weight: .semibold))
@@ -455,6 +546,7 @@ private struct ActivityPill: View {
                     .font(.system(size: 12, weight: .medium).monospacedDigit())
                     .foregroundStyle(Palette.secondary)
                     .frame(width: 36, alignment: .trailing)
+                    .accessibilityHidden(true)
             }
             if activity.kind != .opening {
                 IconButton(symbol: "xmark", help: L("Отменить"), size: 24) {
@@ -485,7 +577,8 @@ private struct NoticePill: View {
                 .foregroundStyle(.black)
                 .frame(width: 26, height: 26)
                 .background(Circle().fill(Brand.mark))
-            Text(L("Сохранено"))
+                .accessibilityHidden(true)
+            Text(L("Экспорт готов"))
                 .font(.system(size: 12.5, weight: .semibold))
                 .lineLimit(1)
                 .fixedSize()
@@ -511,3 +604,59 @@ private struct NoticePill: View {
         .onAppear { Haptics.success() }
     }
 }
+
+/// The video of the last session is open again, with its subtitles.
+private struct RestorePill: View {
+    @EnvironmentObject var model: AppModel
+    let name: String
+
+    var body: some View {
+        Pill(leading: 7, trailing: 8) {
+            Image(systemName: "clock.arrow.circlepath")
+                .font(.system(size: 11.5, weight: .bold))
+                .foregroundStyle(.black)
+                .frame(width: 26, height: 26)
+                .background(Circle().fill(Brand.mark))
+                .accessibilityHidden(true)
+            Text(L("Работа восстановлена"))
+                .font(.system(size: 12.5, weight: .semibold))
+                .lineLimit(1)
+                .fixedSize()
+            Text(name)
+                .font(.system(size: 12))
+                .foregroundStyle(Palette.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            IconButton(symbol: "xmark", help: L("Скрыть"), size: 24) {
+                model.restoreNotice = nil
+            }
+        }
+        .help(L("Subline сохраняет субтитры и правки сам и при запуске открывает видео, над которым шла работа"))
+    }
+}
+
+/// The subtitle under the playhead takes more lines than its style allows (shown while the video stands).
+private struct OverflowPill: View {
+    @EnvironmentObject var model: AppModel
+    let cue: Cue
+    let fit: LineFit
+
+    var body: some View {
+        Pill(leading: 14, trailing: 7) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(Palette.attention)
+            Text(OverflowNote.pillTitle(fit))
+                .font(.system(size: 12.5, weight: .medium))
+                .lineLimit(1)
+                .fixedSize()
+            Button(L("Разделить")) {
+                model.splitToFit(cue.id)
+            }
+            .appButton(.primary)
+            .controlSize(.small)
+            .fixedSize()
+        }
+        .help(OverflowNote.help(fit))
+    }
+}
+

@@ -142,7 +142,7 @@ public enum Exporter {
         var lastError: Error?
         for (index, arguments) in attempts.enumerated() {
             do {
-                progress(index == 0 ? L("Кодирую видео…") : L("Кодирую видео программным кодеком…"), 0.05)
+                progress(index == 0 ? L("Кодирую видео…") : L("Кодирую видео без ускорения…"), 0.05)
                 try await FFmpeg.run(arguments) { line in
                     if let t = FFmpeg.progressSeconds(line), info.duration > 0 {
                         progress(L("Кодирую видео…"), 0.05 + 0.95 * min(1, t / info.duration))
