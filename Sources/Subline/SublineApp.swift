@@ -238,6 +238,15 @@ enum MainWindow {
         }
     }
 
+    /// Subline in front of the other apps.
+    static func activateApp() {
+        if #available(macOS 14.0, *) {
+            NSApp.activate()
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
+        }
+    }
+
     /// The window in front, with the Dock icon and the menu bar.
     static func show() {
         if inBackground {
@@ -245,11 +254,7 @@ enum MainWindow {
             NSApp.setActivationPolicy(.regular)
             cameBack?()
         }
-        if #available(macOS 14.0, *) {
-            NSApp.activate()
-        } else {
-            NSApp.activate(ignoringOtherApps: true)
-        }
+        activateApp()
         guard let window else { return }
         if window.isMiniaturized { window.deminiaturize(nil) }
         window.makeKeyAndOrderFront(nil)
@@ -710,10 +715,11 @@ enum DebugHooks {
                 renderOffscreen(view, size: NSHostingView(rootView: view).fittingSize, to: parts[1])
             }
         case "render-glyph":
-            // render-glyph=<marks typed>,<path>: the menu bar icon during recognition, white, 8 pixels per point
+            // render-glyph=<working|success|failure>,<path>: the menu bar icon, white, 8 pixels per point
             let args = parts.count > 1 ? parts[1].split(separator: ",", maxSplits: 1).map(String.init) : []
-            guard args.count == 2, let typed = Double(args[0]) else { break }
-            let image = WorkGlyph.image(.typing(typed))
+            let faces: [String: WorkGlyph.Face] = ["working": .working, "success": .success, "failure": .failure]
+            guard args.count == 2, let face = faces[args[0]] else { break }
+            let image = WorkGlyph.image(face)
             guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(image.size.width * 8),
                                              pixelsHigh: Int(image.size.height * 8), bitsPerSample: 8, samplesPerPixel: 4,
                                              hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0,

@@ -384,8 +384,9 @@ final class UXFixTests: XCTestCase {
         let transport = accessibilityNodes(TransportBar(player: model.player).environmentObject(model), size: CGSize(width: 800, height: 60))
         XCTAssertTrue(transport.contains { $0.role == "AXSlider" && $0.label == L("Позиция") }, "the scrubber is a slider of the position")
 
-        let settings = accessibilityNodes(SettingsView().environmentObject(model.updater), size: CGSize(width: 380, height: 260))
+        let settings = accessibilityNodes(SettingsView().environmentObject(model.updater), size: CGSize(width: 380, height: 360))
         XCTAssertTrue(settings.contains { $0.role == "AXCheckBox" && $0.label == L("Звуковые эффекты") }, "a switch has its name")
+        XCTAssertTrue(settings.contains { $0.label == L("Язык интерфейса") }, "the language row has its name")
     }
 
     // MARK: Pictures

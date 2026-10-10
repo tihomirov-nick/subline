@@ -359,6 +359,10 @@ final class AppModel: ObservableObject {
         keyboard.install { [weak self] command in
             self?.handle(command) ?? false
         }
+        // The menu of the menu bar icon: stop the work, look for an update, quit the way ⌘Q does.
+        menuBarIcon.stopWork = { [weak self] in self?.cancelActivity() }
+        menuBarIcon.checkForUpdates = { [weak self] in self?.updater.check(userInitiated: true) }
+        menuBarIcon.quit = { [weak self] in AppDelegate.quit(self) }
         // Set only when they change: every percent of a download would otherwise redraw all that watches the model.
         updateWatch = updater.$state.sink { [weak self] state in
             guard let self else { return }

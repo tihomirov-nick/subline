@@ -13,10 +13,10 @@ let bodyColor: (red: CGFloat, green: CGFloat, blue: CGFloat) = (0, 0, 0)
 /// squircle at 100...924, y growing upwards. The proportions are those of the subtitles badge the user sent as the
 /// reference (142 × 100 px): capsules with fully round ends, 10 thick, 23⅓ and 56⅔ long, 10 apart, the lines 16⅔
 /// apart, so both lines are 90 wide. In thicknesses: 7/3 and 17/3 long, 1 apart, the lines 5/3 apart and 9 wide. The
-/// lines are 632 wide here (196...828, as wide as the earlier mark and as Slovo's), so the capsules are 70.2 thick, and
-/// the block sits in the middle of the body.
+/// lines are 660 wide here (182...842), 80 % of the body's 824, so the capsules are 73.3 thick, and the block sits in
+/// the middle of the body, 82 px from its edges, far from the rounded corners.
 func drawMark(_ ctx: CGContext) {
-    let width: CGFloat = 632
+    let width: CGFloat = 660
     let thickness = width / 9
     let short = thickness * 7 / 3, gap = thickness, lineGap = thickness * 5 / 3
     let long = width - short - gap
