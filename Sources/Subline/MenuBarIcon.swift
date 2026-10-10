@@ -158,14 +158,7 @@ final class MenuBarIcon: NSObject {
     }
 
     @objc private func bringWindowForward() {
-        if #available(macOS 14.0, *) {
-            NSApp.activate()
-        } else {
-            NSApp.activate(ignoringOtherApps: true)
-        }
-        let window = NSApp.windows.first { $0.identifier?.rawValue == "main" } ?? NSApp.windows.first { $0.canBecomeMain }
-        if window?.isMiniaturized == true { window?.deminiaturize(nil) }
-        window?.makeKeyAndOrderFront(nil)
+        MainWindow.show()
     }
 
     private func observe(_ center: NotificationCenter, _ name: Notification.Name, _ change: @escaping (MenuBarIcon) -> Void) {

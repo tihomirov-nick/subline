@@ -3,10 +3,10 @@ import AppKit
 import SublineCore
 
 /// The left block: speech recognition on top, the subtitles below, an update of Subline at the bottom when there is one.
+/// The block does not watch the updater: the card does, and the model says when it comes and goes (`showsUpdate`).
 struct SidebarView: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var modelStore: ModelStore
-    @EnvironmentObject var updater: Updater
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -48,8 +48,8 @@ struct SidebarView: View {
                 }
             }
             .frame(maxHeight: .infinity)
-            if updater.state != .idle {
-                UpdateBanner()
+            if showsUpdate {
+                UpdateBanner(hold: updateHold)
                     .padding(.horizontal, Metrics.inset)
                     .padding(.top, 4)
                     .padding(.bottom, Metrics.inset)
@@ -57,9 +57,23 @@ struct SidebarView: View {
             }
         }
         .animation(Motion.animation(Motion.island, reduceMotion: reduceMotion), value: modelStore.hasAnyModel)
-        .animation(Motion.animation(Motion.island, reduceMotion: reduceMotion), value: updater.state == .idle)
+        .animation(Motion.animation(Motion.island, reduceMotion: reduceMotion), value: showsUpdate)
         .animation(Motion.animation(Motion.island, reduceMotion: reduceMotion), value: model.needsRebuild)
         .animation(Motion.animation(Motion.island, reduceMotion: reduceMotion), value: model.cues.isEmpty)
+    }
+
+    /// The update card is on every screen but recognition and export, which a restart would break.
+    private var showsUpdate: Bool {
+        guard model.showsUpdate else { return false }
+        switch model.activity?.kind {
+        case .transcribing, .exporting: return false
+        default: return true
+        }
+    }
+
+    /// Why «Обновить» waits: the restart would break the download of a model.
+    private var updateHold: String? {
+        modelStore.downloads.isEmpty ? nil : L("Обновление перезапустит Subline. Сначала дождитесь, пока скачается модель")
     }
 }
 

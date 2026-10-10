@@ -6,7 +6,9 @@ import SublineCore
 @main
 struct SublineApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @StateObject private var model = AppModel()
+    // Made on first use, after `init` has carried over the settings. The app delegate wires it up at launch, with or
+    // without the window.
+    @StateObject private var model = AppModel.shared
 
     init() {
         FormerName.adoptSettings()
@@ -22,10 +24,6 @@ struct SublineApp: App {
                 .environmentObject(model.updater)
                 .frame(minWidth: 1100, minHeight: 680)
                 .modifier(DebugActiveState())
-                .onAppear {
-                    appDelegate.attach(model)
-                    DebugHooks.model = model
-                }
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1400, height: 860)
@@ -204,26 +202,119 @@ struct PlayheadCommands: Commands {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
-    private weak var model: AppModel?
-    private var pendingURLs: [URL] = []
+extension AppModel {
+    /// The window's model, made once. The app delegate wires it up at launch, with or without the window; tests make
+    /// models of their own.
+    static let shared = AppModel()
+}
 
-    @MainActor
-    func attach(_ model: AppModel) {
-        self.model = model
+/// The main window and the Dock icon. Started at login, or brought back quietly by an update that installed itself while
+/// Subline ran without them, Subline runs with neither: it only checks for updates and installs them. Opening Subline
+/// from the Dock, Launchpad or Finder, a file opened with it and a click on the menu bar icon bring both back.
+@MainActor
+enum MainWindow {
+    /// Running without the window and the Dock icon.
+    private(set) static var inBackground = false
+    /// Runs when the window comes back from the background (the app delegate brings back the last video).
+    static var cameBack: (() -> Void)?
+
+    static var window: NSWindow? {
+        NSApp.windows.first { $0.identifier?.rawValue == "main" }
+            ?? NSApp.windows.first { $0.identifier?.rawValue.hasPrefix("main-") == true }
+    }
+
+    /// While the app launches, before its windows open.
+    static func startInBackground() {
+        inBackground = true
+        NSApp.setActivationPolicy(.accessory)
+    }
+
+    /// SwiftUI opens the main window by itself, before applicationDidFinishLaunching: in the background it goes away
+    /// there, before it is drawn. A window that opens later goes away in `WindowConfigurator`.
+    static func hideWindows() {
+        guard inBackground else { return }
+        for window in NSApp.windows where window.isVisible && window.canBecomeMain {
+            window.orderOut(nil)
+        }
+    }
+
+    /// The window in front, with the Dock icon and the menu bar.
+    static func show() {
+        if inBackground {
+            inBackground = false
+            NSApp.setActivationPolicy(.regular)
+            cameBack?()
+        }
+        if #available(macOS 14.0, *) {
+            NSApp.activate()
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        guard let window else { return }
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        window.makeKeyAndOrderFront(nil)
+    }
+}
+
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var attached = false
+    private var pendingURLs: [URL] = []
+    private var observers: [NSObjectProtocol] = []
+    /// The quit waits until then: "Обновляюсь до версии…" stays in the window for a moment before an update that
+    /// installed itself restarts Subline.
+    private var restartNoticeEnd: Date?
+
+    private var model: AppModel? { attached ? AppModel.shared : nil }
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // Black blocks and white text everywhere, as in FaceID: menus, panels and alerts are dark too.
+        NSApp.appearance = NSAppearance(named: .darkAqua)
+        // Started at login, Subline runs in the background (MainWindow).
+        if Updater.LoginItem.launchedAtLogin { MainWindow.startInBackground() }
+    }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        MainWindow.hideWindows()
+        let model = AppModel.shared
+        attach(model)
+        DebugHooks.model = model
+        connect(model.updater)
+        model.updater.start()
+        DebugHooks.install()
+    }
+
+    private func attach(_ model: AppModel) {
+        attached = true
         WindowCloseGuard.shared.mayClose = { [weak model] in model?.confirmStopForClosing() ?? true }
+        MainWindow.cameBack = { [weak self] in self?.windowCameBack() }
         if let url = pendingURLs.first {
             pendingURLs.removeAll()
             model.openMedia(url)
-        } else if !DebugHooks.opensFile {
-            // The video of the last session comes back with its subtitles, unless a file is being opened from Finder.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                guard let self, self.pendingURLs.isEmpty, model.mediaURL == nil else { return }
-                model.restoreLastSession()
-            }
+        } else if !DebugHooks.opensFile && !MainWindow.inBackground {
+            restoreSessionSoon()
         }
-        // The window focuses its first text field on opening (a value in the inspector). Nothing is being
-        // typed yet, so take that focus back: Space and the arrows then control the player right away.
+        if !MainWindow.inBackground { releaseTextFocusSoon() }
+    }
+
+    /// The window is back from the background: as at a usual launch, the last video comes back unless a file is being
+    /// opened, and no text field keeps the focus.
+    private func windowCameBack() {
+        if !DebugHooks.opensFile { restoreSessionSoon() }
+        releaseTextFocusSoon()
+    }
+
+    /// The video of the last session comes back with its subtitles, unless a file is being opened from Finder.
+    private func restoreSessionSoon() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self, let model = self.model, self.pendingURLs.isEmpty, model.mediaURL == nil else { return }
+            model.restoreLastSession()
+        }
+    }
+
+    /// The window focuses its first text field on opening (a value in the inspector). Nothing is being typed yet, so take
+    /// that focus back: Space and the arrows then control the player right away.
+    private func releaseTextFocusSoon() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             for window in NSApp.windows where window.firstResponder is NSText {
                 window.makeFirstResponder(nil)
@@ -231,32 +322,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func connect(_ updater: Updater) {
+        // An update that installs itself restarts Subline only when that breaks nothing (AppModel.holdsWork) and no panel,
+        // sheet or alert is open.
+        updater.appIsBusy = { [weak self] in
+            self?.model?.holdsWork == true || NSApp.modalWindow != nil || NSApp.windows.contains { $0.attachedSheet != nil }
+        }
+        // Such an update shows "Обновляюсь до версии…" in the window for a moment before the restart, when the window is
+        // on screen (applicationShouldTerminate).
+        observers.append(NotificationCenter.default.addObserver(forName: Updater.willRestart, object: updater,
+                                                                queue: nil) { [weak self] note in
+            let automatic = note.userInfo?["automatic"] as? Bool == true
+            MainActor.assumeIsolated {
+                guard automatic, !MainWindow.inBackground, MainWindow.window?.isVisible == true else { return }
+                self?.restartNoticeEnd = Date().addingTimeInterval(1.5)
+            }
+        })
+    }
+
+    /// Subline opened from the Dock, Launchpad or Finder while it runs: the window comes back, from the background too.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        let window = MainWindow.window
+        guard MainWindow.inBackground || window?.isVisible != true else { return true }
+        MainWindow.show()
+        // No window to bring back: SwiftUI opens a new one.
+        return window == nil
+    }
+
+    /// Files dropped onto the Dock icon or opened with "Open With". The window comes back for them from the background.
     func application(_ application: NSApplication, open urls: [URL]) {
         guard let url = urls.first else { return }
-        Task { @MainActor in
-            if let model = self.model {
-                model.requestOpen(url)
-            } else {
-                self.pendingURLs = [url]
-            }
+        if let model {
+            model.requestOpen(url)
+        } else {
+            pendingURLs = [url]
         }
+        MainWindow.show()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
     }
 
-    func applicationWillFinishLaunching(_ notification: Notification) {
-        // Black blocks and white text everywhere, as in FaceID: menus, panels and alerts are dark too.
-        NSApp.appearance = NSAppearance(named: .darkAqua)
-    }
-
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        DebugHooks.install()
-    }
-
     /// Closes sheets first: macOS refuses to quit while a sheet is open. Waits until they are gone.
-    @MainActor
     static func quit(_ model: AppModel?) {
         model?.showModelManager = false
         model?.showFontLibrary = false
@@ -280,19 +388,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// An open sheet (model manager) would otherwise block quitting. Running recognition or export is lost on quitting,
-    /// so the person is asked first; subtitles and edits are written to disk.
+    /// so the person is asked first; subtitles and edits are written to disk, the ones still waiting for the delayed save
+    /// too. Before an update that installed itself restarts Subline, the window shows it for a moment.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        MainActor.assumeIsolated { () -> NSApplication.TerminateReply in
-            if let model, !model.confirmStopForClosing() { return .terminateCancel }
-            model?.flushPendingSaves()
-            model?.showModelManager = false
-            model?.showFontLibrary = false
-            for window in NSApp.windows {
-                if let sheet = window.attachedSheet { window.endSheet(sheet) }
-            }
-            model?.cancelActivity()
-            return .terminateNow
+        if let model, !model.confirmStopForClosing() {
+            restartNoticeEnd = nil
+            return .terminateCancel
         }
+        model?.flushPendingSaves()
+        model?.showModelManager = false
+        model?.showFontLibrary = false
+        for window in NSApp.windows {
+            if let sheet = window.attachedSheet { window.endSheet(sheet) }
+        }
+        model?.cancelActivity()
+        let notice = max(0, restartNoticeEnd?.timeIntervalSinceNow ?? 0)
+        restartNoticeEnd = nil
+        guard notice > 0 else { return .terminateNow }
+        // While it waits for the reply, AppKit runs the main run loop in the modal panel mode.
+        let timer = Timer(timeInterval: notice, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                // An edit made meanwhile is written as well.
+                self?.model?.flushPendingSaves()
+                NSApp.reply(toApplicationShouldTerminate: true)
+            }
+        }
+        RunLoop.main.add(timer, forMode: .modalPanel)
+        RunLoop.main.add(timer, forMode: .default)
+        return .terminateLater
     }
 }
 

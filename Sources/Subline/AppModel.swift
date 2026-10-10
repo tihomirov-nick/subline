@@ -276,6 +276,9 @@ final class AppModel: ObservableObject {
     @Published var fontsVersion = 0
     /// An update is being downloaded or installed: Subline restarts soon, so recognition and export wait.
     @Published private(set) var updateInProgress = false
+    /// The updater has something for the window: a new version, its download, the restart, the result of a check. The
+    /// card itself watches the updater; this changes only when it comes or goes, not with every percent of a download.
+    @Published private(set) var showsUpdate = false
 
     /// The window's undo manager (set by the main view).
     weak var undoManager: UndoManager?
@@ -356,16 +359,21 @@ final class AppModel: ObservableObject {
         keyboard.install { [weak self] command in
             self?.handle(command) ?? false
         }
+        // Set only when they change: every percent of a download would otherwise redraw all that watches the model.
         updateWatch = updater.$state.sink { [weak self] state in
             guard let self else { return }
             // An update that broke off sounds like any failure; finding one is silent.
             if case .failed = state, self.updateInProgress { SoundEffects.play(.failure) }
+            var inProgress = false
             switch state {
-            case .downloading, .installing: self.updateInProgress = true
-            default: self.updateInProgress = false
+            case .downloading, .installing: inProgress = true
+            default: break
             }
+            if self.updateInProgress != inProgress { self.updateInProgress = inProgress }
+            if self.showsUpdate != (state != .idle) { self.showsUpdate = state != .idle }
         }
-        updater.start()
+        // The updater is started by the app delegate at launch, with or without the window (tests make models of their
+        // own and start nothing).
     }
 
     // MARK: - Presets
@@ -618,6 +626,14 @@ final class AppModel: ObservableObject {
     var hasVideo: Bool { media?.hasVideo == true }
     var isBusy: Bool { activity != nil }
     var isExporting: Bool { activity?.kind == .exporting }
+
+    /// What a restart would break: a file opening, recognition, export, a model or a font downloading, the text of
+    /// a subtitle being typed in the active window, playback. An update that installs itself waits until none of it is
+    /// left (Updater.appIsBusy). Edits are no reason to wait: the quit writes the last of them at once.
+    var holdsWork: Bool {
+        activity != nil || !modelStore.downloads.isEmpty || !fontStore.installing.isEmpty
+            || (editingCueID != nil && NSApp.isActive) || player.isPlaying
+    }
 
     /// How times are written for the open file: with hours for an hour or longer, everywhere alike.
     var clockFormat: ClockFormat { ClockFormat(duration: media?.duration ?? 0) }

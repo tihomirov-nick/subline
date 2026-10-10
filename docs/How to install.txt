@@ -98,13 +98,26 @@ You can share presets with colleagues. Open the "…" menu next to the preset
 and choose "Export Preset…" or "Import Presets…".
 
 UPDATES
-After launch and once a day Subline checks GitHub for a new version. If there
-is one, a card appears at the bottom of the list on the left. "Update" installs
-the new version and restarts Subline, "Later" hides the card until the next
-check, "Skip" stops offering this version. An update doesn't install while
-speech is recognized or a video is exported. To check by hand, choose "Check
-for Updates…" in the Subline menu; the "Check for updates" switch in Settings
-(⌘,) turns the automatic checks off.
+Subline looks for a new version on GitHub right after launch and then every
+three hours. It downloads a new version by itself, checks its signature and
+installs it when Subline is idle. While speech is recognized, a video is
+exported, a model downloads, a video plays or you edit a subtitle's text,
+the update waits. Before the restart the list on the left shows "Updating to
+version…" for a moment, then the same video opens again with its subtitles
+and edits. If you quit Subline first, the new version goes in when it quits.
+
+With "Install updates automatically" turned off in Settings (⌘,), Subline
+shows a card with "Update", "Later" and "Skip" at the bottom of the list on
+the left instead. "Later" hides the card for a day. To check by hand, choose
+"Check for Updates…" in the Subline menu. The "Check for updates" switch in
+Settings turns the checks off altogether.
+
+OPEN AT LOGIN
+Subline opens at login without a window or a Dock icon, to install updates
+on time. macOS shows a notification when Subline adds itself to the login
+items for the first time. The window appears when you open Subline from
+Launchpad, Finder or the Dock, or open a video with it. To stop it, turn off
+"Open at login" in Settings.
 
 REQUIREMENTS
 macOS 13.3 or later. Subline is fastest on Macs with Apple Silicon (M1 and

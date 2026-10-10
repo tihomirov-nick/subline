@@ -275,13 +275,17 @@ struct SwitchRow: View {
     var help: String?
     @Binding var isOn: Bool
     @State private var hovering = false
+    @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {
         Row(title: title, help: help) {
             Switch(isOn: $isOn)
         }
-        .background(RowHover(hovering: hovering))
+        // Unavailable (another switch turns it off): dimmed, and a click does nothing.
+        .opacity(isEnabled ? 1 : 0.4)
+        .background(RowHover(hovering: hovering && isEnabled))
         .onTapGesture {
+            guard isEnabled else { return }
             isOn.toggle()
             Haptics.tap()
         }
@@ -1548,6 +1552,14 @@ struct WindowConfigurator: NSViewRepresentable {
             }
             window.toolbarStyle = .unifiedCompact
             window.backgroundColor = NSColor(Palette.window)
+            if MainWindow.inBackground {
+                // Started at login (MainWindow): a window that opens after launch goes away once SwiftUI has shown it.
+                DispatchQueue.main.async { [weak window] in
+                    MainActor.assumeIsolated {
+                        if MainWindow.inBackground { window?.orderOut(nil) }
+                    }
+                }
+            }
             report()
             for name in [NSWindow.didEnterFullScreenNotification, NSWindow.didExitFullScreenNotification,
                          NSWindow.didResizeNotification] {

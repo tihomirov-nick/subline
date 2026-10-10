@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import SublineCore
 
 // MARK: - Texts
@@ -38,12 +39,17 @@ extension Updater {
     /// The status in Settings, next to the version.
     var statusText: String {
         switch state {
-        case .idle: return isDevelopmentBuild ? L("Сборка для разработки") : ""
+        case .idle:
+            // An update that installs itself is under way.
+            if let job = automaticUpdate {
+                return job.ready ? L("Версия %@ скачана", "\(job.release.version)") : L("Скачиваю версию %@", "\(job.release.version)")
+            }
+            return isDevelopmentBuild ? L("Сборка для разработки") : ""
         case .checking: return L("Проверяю…")
         case .upToDate: return L("Последняя версия")
         case .available(let release): return L("Доступна %@", "\(release.version)")
         case .downloading(_, let progress): return L("Скачивание %@%%", "\(Int(progress * 100))")
-        case .installing: return L("Устанавливаю…")
+        case .installing: return L("Обновляюсь…")
         case .failed(let failure, _): return failure.text
         }
     }
@@ -51,9 +57,13 @@ extension Updater {
     var statusHelp: String {
         switch state {
         case .failed(let failure, _): return failure.help
+        case .idle where automaticUpdate?.ready == true:
+            return L("Новая версия встанет, когда Subline освободится или закроется")
         default:
-            return isDevelopmentBuild ? L("Эта сборка сделана из исходного кода и сама не обновляется")
-                                      : L("Subline сам проверяет, вышла ли новая версия, и предлагает её поставить")
+            if isDevelopmentBuild { return L("Эта сборка сделана из исходного кода и сама не обновляется") }
+            if !automaticChecks { return L("Автоматическая проверка выключена. Проверить можно этой кнопкой или пунктом «Проверить обновления…» в меню Subline") }
+            return automaticInstall ? L("Subline сам проверяет, вышла ли новая версия, и ставит её, когда ничем не занят")
+                                    : L("Subline сам проверяет, вышла ли новая версия, и предлагает её поставить")
         }
     }
 
@@ -90,10 +100,12 @@ enum ReleaseNotes {
 // MARK: - The card in the window
 
 /// The update at the bottom of the subtitles block: what is new and Update, Later, Skip; the progress with Cancel
-/// while it downloads; a short reason and the download page (or the downloaded installer) when it fails. Updating
-/// restarts Subline, so it waits until recognition and export are over.
+/// while it downloads; a short reason and the download page (or the downloaded installer) when it fails; the restart.
+/// Updating restarts Subline, so the block hides the card while recognition or export runs. The card watches only the
+/// updater: what else it needs comes from the block as a value.
 struct UpdateBanner: View {
-    @EnvironmentObject var model: AppModel
+    /// Why «Обновить» waits (a model is downloading); nil when it can go.
+    let hold: String?
     @EnvironmentObject var updater: Updater
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -106,6 +118,16 @@ struct UpdateBanner: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .card()
         .animation(Motion.animation(Motion.quick, reduceMotion: reduceMotion), value: kind)
+        .onAppear(perform: noteOffer)
+        .onChange(of: updater.freshOffer) { _ in noteOffer() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in noteOffer() }
+    }
+
+    /// A version an automatic check has found counts as shown once this card is on screen: in the window, not in the
+    /// background (MainWindow).
+    private func noteOffer() {
+        guard updater.freshOffer != nil, !MainWindow.inBackground, MainWindow.window?.isVisible == true else { return }
+        updater.offerShown()
     }
 
     private var header: some View {
@@ -194,7 +216,7 @@ struct UpdateBanner: View {
                 .frame(maxWidth: .infinity)
         }
         .appButton(.primary)
-        .disabled(model.isBusy || updater.isDevelopmentBuild)
+        .disabled(hold != nil || updater.isDevelopmentBuild)
         .help(updateHelp)
     }
 
@@ -202,7 +224,7 @@ struct UpdateBanner: View {
         Button(L("Позже")) { updater.dismiss() }
             .appButton(.secondary)
             .fixedSize()
-            .help(L("Напомнить при следующей проверке"))
+            .help(L("Напомнить через сутки"))
     }
 
     private func skipButton(_ release: Updater.Release) -> some View {
@@ -214,7 +236,7 @@ struct UpdateBanner: View {
 
     private var updateHelp: String {
         if updater.isDevelopmentBuild { return L("Эта сборка сама не обновляется. Поставьте Subline из установщика") }
-        if model.isBusy { return L("Обновление перезапустит Subline, поэтому оно станет доступно, когда закончится распознавание или экспорт") }
+        if let hold { return hold }
         return L("Скачать новую версию, установить её и перезапустить Subline")
     }
 
@@ -242,7 +264,7 @@ struct UpdateBanner: View {
         case .upToDate: return L("Установлена последняя версия")
         case .available(let release): return L("Доступна версия %@", "\(release.version)")
         case .downloading(let release, _): return L("Скачиваю версию %@", "\(release.version)")
-        case .installing(let release): return L("Устанавливаю версию %@", "\(release.version)")
+        case .installing(let release): return L("Обновляюсь до версии %@…", "\(release.version)")
         case .failed(let failure, _): return failure.text
         }
     }
@@ -250,7 +272,7 @@ struct UpdateBanner: View {
     private var subtitle: String? {
         switch updater.state {
         case .upToDate: return "Subline \(updater.currentVersion)"
-        case .installing: return L("Subline перезапустится сам")
+        case .installing: return L("Сейчас Subline перезапустится")
         case .failed(_, let release?): return L("Версия %@", "\(release.version)")
         default: return nil
         }

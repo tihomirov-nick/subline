@@ -2,8 +2,8 @@ import SwiftUI
 import AppKit
 import SublineCore
 
-/// Settings (⌘,): the interface language, the sound effects and the updates. The language follows macOS; a separate one
-/// for Subline is chosen in System Settings.
+/// Settings (⌘,): the interface language, the sound effects, opening at login and the updates. The language follows
+/// macOS; a separate one for Subline is chosen in System Settings.
 struct SettingsView: View {
     @EnvironmentObject var updater: Updater
     @AppStorage(SoundEffects.enabledKey) private var soundEffects = true
@@ -35,9 +35,16 @@ struct SettingsView: View {
             }
             .card()
             VStack(spacing: 0) {
+                LoginItemRows()
+                Separator()
                 SwitchRow(title: L("Проверять обновления"),
-                          help: L("После запуска и раз в день Subline смотрит, не вышла ли новая версия, и предлагает её поставить"),
+                          help: L("Subline смотрит, не вышла ли новая версия, сразу после запуска и потом каждые три часа"),
                           isOn: Binding(get: { updater.automaticChecks }, set: { updater.automaticChecks = $0 }))
+                Separator()
+                SwitchRow(title: L("Обновлять автоматически"),
+                          help: L("Новая версия скачивается и ставится сама, когда Subline ничем не занят. Пока идёт распознавание, экспорт или загрузка модели, играет видео или вы правите текст субтитра, обновление ждёт. Если выключить, Subline будет только предлагать обновиться"),
+                          isOn: Binding(get: { updater.automaticInstall }, set: { updater.automaticInstall = $0 }))
+                    .disabled(!updater.automaticChecks)
                 Separator()
                 // The version with the status under it: a reason can be long, the button stays.
                 HStack(spacing: 8) {
@@ -85,6 +92,50 @@ struct SettingsView: View {
         if !NSWorkspace.shared.open(pane) {
             NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/System Settings.app"))
         }
+    }
+}
+
+/// Opening at login (Updater.LoginItem), and the way to System Settings when it is switched off there: only the user can
+/// switch it on again in Login Items.
+private struct LoginItemRows: View {
+    @ObservedObject private var loginItem = Updater.LoginItem.shared
+    @State private var needsApproval = false
+
+    var body: some View {
+        SwitchRow(title: L("Запускать при входе"),
+                  help: L("При входе в систему Subline запускается без окна и значка в Dock, чтобы вовремя ставить обновления. Окно появится, когда вы откроете Subline"),
+                  isOn: Binding(get: { loginItem.isEnabled }, set: {
+                      loginItem.set($0)
+                      needsApproval = loginItem.needsApproval
+                  }))
+            .onAppear(perform: refresh)
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in refresh() }
+        if needsApproval {
+            Separator()
+            HStack(spacing: 8) {
+                Text(L("Выключено в Системных настройках"))
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Palette.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 6)
+                Button(L("Открыть «Объекты входа»")) { loginItem.openSystemSettings() }
+                    .appButton(.secondary)
+                    .controlSize(.small)
+                    .fixedSize()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .frame(minHeight: Metrics.rowHeight)
+            .contentShape(Rectangle())
+            .help(L("Запуск при входе выключен в Системных настройках, в разделе «Объекты входа». Включить его снова можно только там"))
+        }
+    }
+
+    /// Read again when Settings open and when the user comes back to Subline: System Settings may have changed it.
+    private func refresh() {
+        loginItem.refresh()
+        needsApproval = loginItem.needsApproval
     }
 }
 
