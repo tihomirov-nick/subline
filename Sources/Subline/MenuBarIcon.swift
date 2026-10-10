@@ -197,10 +197,12 @@ final class MenuBarIcon: NSObject {
 }
 
 /// The glyph, drawn in code as a template image: the subtitles badge the app icon is drawn from, as it is, a filled plate
-/// with two caption lines of capsules cut out of it, a short and a long one over a long and a short one. The image is as
-/// high as the menu bar lets an icon be, 22 pt, and 29 pt wide, with the 28 × 20 pt plate in the middle and half a point
-/// beside it, as in every app of the family. The status item is `variableLength`, as wide as the image and the menu bar's
-/// own margins. The capsules are 2 pt thick and sit on whole pixels at 1x and at 2x, so they stay crisp on any screen.
+/// with two caption lines of capsules cut out of it, a short and a long one over a long and a short one. The mark is as
+/// big as the menu bar's own icons (Wi-Fi, Control Center): about 16 pt high and at most 20 pt wide. The badge is 1.4 times
+/// as wide as high, so at 16 pt it would be wider than 20; it is 20 pt wide and 14 pt high. The image is 22 pt high, the
+/// plate is in the middle of it, and half a point is left beside it, as in every app of the family (21 pt wide). The
+/// status item is `variableLength`, as wide as the image and the menu bar's own margins. Everything is measured in half
+/// points, whole pixels at 2x: the capsules are 1.5 pt (3 px) thick, so they stay crisp on a Retina screen.
 enum WorkGlyph {
     enum Face: Hashable {
         /// Recognition or export: the four capsules cut through.
@@ -212,22 +214,26 @@ enum WorkGlyph {
     }
 
     /// The canvas, and the plate in it, as wide against its height as the badge and as round in the corners.
-    static let size = NSSize(width: 29, height: 22)
-    static let plate = NSRect(x: 0.5, y: 1, width: 28, height: 20)
-    private static let cornerRadius: CGFloat = 3
+    static let size = NSSize(width: 21, height: 22)
+    static let plate = NSRect(x: 0.5, y: 4, width: 20, height: 14)
+    private static let cornerRadius: CGFloat = 2
     /// The check mark and the exclamation mark.
-    private static let line: CGFloat = 3
+    private static let line: CGFloat = 2
     /// The dot of the exclamation mark.
-    private static let dot: CGFloat = 4.2
-    private static let thickness: CGFloat = 2
+    private static let dot: CGFloat = 3
+    private static let thickness: CGFloat = 1.5
+    /// How far the middle of each caption line is from the middle of the plate: the lines are 2.5 pt apart, a gap of 1 pt
+    /// between them, so that the rows of pixels of both lines are whole at 2x.
+    static let lineOffset: CGFloat = 1.25
 
     /// The capsules in reading order, the centres of their round ends from the top left of the canvas, so that a capsule
     /// is a line from x0 to x1 with round caps. The icon's proportions (both lines 9 thicknesses wide, a short capsule
-    /// 7/3 of one, the gap one) rounded to whole pixels at 1x: lines 18 pt wide, a capsule 4 pt long, a gap of 2 pt, a
-    /// long capsule up to the end, under it the same turned round, the lines 4 pt apart.
+    /// 7/3 of one, the gap one) in whole pixels at 2x: lines 13.5 pt wide in the middle of the plate, a capsule 3.5 pt
+    /// long, a gap of 1.5 pt, a long capsule up to the end, under it the same turned round.
     static let marks: [(x0: CGFloat, x1: CGFloat, y: CGFloat)] = {
-        let left = plate.minX + 5, width: CGFloat = 18, short: CGFloat = 4, gap: CGFloat = 2
-        let top = plate.midY - 3, bottom = plate.midY + 3
+        let width: CGFloat = 13.5, short: CGFloat = 3.5, gap: CGFloat = 1.5
+        let left = plate.midX - width / 2
+        let top = plate.midY - lineOffset, bottom = plate.midY + lineOffset
         let end = thickness / 2, long = width - short - gap
         return [(left + end, left + short - end, top), (left + short + gap + end, left + width - end, top),
                 (left + end, left + long - end, bottom), (left + long + gap + end, left + width - end, bottom)]
@@ -257,10 +263,11 @@ enum WorkGlyph {
         case .working:
             for mark in marks { drawMark(mark) }
         case .success:
-            stroke([NSPoint(x: x - 6, y: y + 0.5), NSPoint(x: x - 1.5, y: y + 5), NSPoint(x: x + 6, y: y - 4.5)], width: line)
+            stroke([NSPoint(x: x - 4.25, y: y + 0.25), NSPoint(x: x - 1.25, y: y + 3.25), NSPoint(x: x + 4.25, y: y - 3.25)],
+                   width: line)
         case .failure:
-            stroke([NSPoint(x: x, y: y - 5.5), NSPoint(x: x, y: y)], width: line)
-            NSBezierPath(ovalIn: NSRect(x: x - dot / 2, y: y + 5 - dot / 2, width: dot, height: dot)).fill()
+            stroke([NSPoint(x: x, y: y - 4), NSPoint(x: x, y: y)], width: line)
+            NSBezierPath(ovalIn: NSRect(x: x - dot / 2, y: y + 3.5 - dot / 2, width: dot, height: dot)).fill()
         }
     }
 

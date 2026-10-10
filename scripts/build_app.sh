@@ -8,7 +8,7 @@ cd "$ROOT"
 
 APP_NAME="Subline"
 BUNDLE_ID="${BUNDLE_ID:-com.subline.app}"
-VERSION="${VERSION:-2.2.5}"
+VERSION="${VERSION:-2.2.6}"
 BUILD_NUMBER="${BUILD_NUMBER:-$(date +%Y%m%d%H%M)}"
 APP="$ROOT/build/$APP_NAME.app"
 

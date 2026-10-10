@@ -4,8 +4,8 @@ import SwiftUI
 @testable import Subline
 @testable import SublineCore
 
-/// The icon in the menu bar: as big as the menu bar allows, standing still, with the check mark and the exclamation mark
-/// inside the plate, and the menu of the family standard. Drawn offscreen; no status item is made (the tests keep the
+/// The icon in the menu bar: as big as the menu bar's own icons, standing still, with the check mark and the exclamation
+/// mark inside the plate, and the menu of the family standard. Drawn offscreen; no status item is made (the tests keep the
 /// icon switched off), so nothing appears in the menu bar.
 @MainActor
 final class MenuBarIconTests: XCTestCase {
@@ -15,14 +15,18 @@ final class MenuBarIconTests: XCTestCase {
 
     // MARK: Size and drawing
 
-    func testTheGlyphIsAsHighAsTheMenuBarAllows() {
-        // The menu bar is 22 pt high; the plate takes 20 of it, 28 wide as the badge is 1.4 times as wide as high, and
-        // half a point is left beside it, like in every app of the family.
+    func testTheGlyphIsAsBigAsTheMenuBarsOwnIcons() {
+        // The menu bar's own icons (Wi-Fi, Control Center) are about 16 pt high and at most 20 wide, in an image 22 pt
+        // high. The badge is 1.4 times as wide as high, so at 16 pt it would be 22.4 wide: it is 20 wide and 14 high, in
+        // the middle of the image, and half a point is left beside it, like in every app of the family.
         XCTAssertEqual(WorkGlyph.size.height, 22)
         XCTAssertLessThanOrEqual(WorkGlyph.size.height, NSStatusBar.system.thickness, "the image fits the menu bar")
-        XCTAssertEqual(WorkGlyph.size, NSSize(width: 29, height: 22))
-        XCTAssertEqual(WorkGlyph.plate, NSRect(x: 0.5, y: 1, width: 28, height: 20))
-        XCTAssertEqual(WorkGlyph.plate.width / WorkGlyph.plate.height, 1.4, accuracy: 0.001)
+        XCTAssertEqual(WorkGlyph.size, NSSize(width: 21, height: 22))
+        XCTAssertEqual(WorkGlyph.plate, NSRect(x: 0.5, y: 4, width: 20, height: 14))
+        XCTAssertLessThanOrEqual(WorkGlyph.plate.height, 16, "no higher than the system icons")
+        XCTAssertLessThanOrEqual(WorkGlyph.plate.width, 20, "no wider than the system icons")
+        XCTAssertEqual(WorkGlyph.plate.width / WorkGlyph.plate.height, 1.4, accuracy: 0.03, "the badge's proportions")
+        XCTAssertEqual(WorkGlyph.plate.midY, WorkGlyph.size.height / 2, "the plate is in the middle of the image")
         for face in [WorkGlyph.Face.working, .success, .failure] {
             let image = WorkGlyph.image(face)
             XCTAssertEqual(image.size, WorkGlyph.size)
@@ -33,25 +37,29 @@ final class MenuBarIconTests: XCTestCase {
 
     func testNothingTouchesTheEdgeOfThePlateOrOfTheImage() throws {
         // 8 pixels to the point. The capsules, the check mark and the exclamation mark are cut out of the plate; each
-        // cut-out stays 2.5 pt (20 px) away from the plate's edge, so none of them is clipped, and the plate itself
-        // stays inside the image with its margin.
+        // cut-out stays 1.75 pt (14 px) away from the plate's edge, so none of them is clipped, and the plate itself
+        // stays inside the image with its margin: half a point at the sides, 4 pt above and below.
         let scale = 8
+        let clearance = 14
+        let side = Int(WorkGlyph.plate.minX * CGFloat(scale)), vertical = Int(WorkGlyph.plate.minY * CGFloat(scale))
         let expected: [WorkGlyph.Face: Int] = [.working: 4, .success: 1, .failure: 2]
         for (face, cuts) in expected {
             let alpha = try alphaRows(face, scale: scale)
             let height = alpha.count, width = alpha[0].count
-            XCTAssertEqual(width, 29 * scale)
-            XCTAssertEqual(height, 22 * scale)
+            XCTAssertEqual(width, Int(WorkGlyph.size.width) * scale)
+            XCTAssertEqual(height, Int(WorkGlyph.size.height) * scale)
             // The plate: where the image is more than half opaque.
             let solid = box(of: alpha.map { $0.map { $0 > 0.5 } })
-            XCTAssertLessThanOrEqual(abs(solid.minX - 4), 1, "\(face): half a point at the left")
-            XCTAssertLessThanOrEqual(abs(solid.maxX - (width - 5)), 1, "\(face): half a point at the right")
-            XCTAssertLessThanOrEqual(abs(solid.minY - 8), 1, "\(face): a point above")
-            XCTAssertLessThanOrEqual(abs(solid.maxY - (height - 9)), 1, "\(face): a point below")
+            XCTAssertLessThanOrEqual(abs(solid.minX - side), 1, "\(face): half a point at the left")
+            XCTAssertLessThanOrEqual(abs(solid.maxX - (width - side - 1)), 1, "\(face): half a point at the right")
+            XCTAssertLessThanOrEqual(abs(solid.minY - vertical), 1, "\(face): 4 pt above")
+            XCTAssertLessThanOrEqual(abs(solid.maxY - (height - vertical - 1)), 1, "\(face): 4 pt below")
             // Everything round the plate is clear.
             var dirty = 0
             for y in 0..<height {
-                for x in 0..<width where (x < 4 || x >= width - 4 || y < 8 || y >= height - 8) && alpha[y][x] > 0.01 { dirty += 1 }
+                for x in 0..<width where (x < side || x >= width - side || y < vertical || y >= height - vertical) && alpha[y][x] > 0.01 {
+                    dirty += 1
+                }
             }
             XCTAssertEqual(dirty, 0, "\(face): the margin of the image is clear")
             // The clear parts that the corner of the image does not reach are the cut-outs.
@@ -62,26 +70,32 @@ final class MenuBarIconTests: XCTestCase {
                 var mask = Array(repeating: Array(repeating: false, count: width), count: height)
                 for cell in hole { mask[cell.y][cell.x] = true }
                 let cut = box(of: mask)
-                XCTAssertGreaterThanOrEqual(cut.minX - solid.minX, 20, "\(face): a cut-out too close to the left edge")
-                XCTAssertGreaterThanOrEqual(solid.maxX - cut.maxX, 20, "\(face): a cut-out too close to the right edge")
-                XCTAssertGreaterThanOrEqual(cut.minY - solid.minY, 20, "\(face): a cut-out too close to the top edge")
-                XCTAssertGreaterThanOrEqual(solid.maxY - cut.maxY, 20, "\(face): a cut-out too close to the bottom edge")
+                XCTAssertGreaterThanOrEqual(cut.minX - solid.minX, clearance, "\(face): a cut-out too close to the left edge")
+                XCTAssertGreaterThanOrEqual(solid.maxX - cut.maxX, clearance, "\(face): a cut-out too close to the right edge")
+                XCTAssertGreaterThanOrEqual(cut.minY - solid.minY, clearance, "\(face): a cut-out too close to the top edge")
+                XCTAssertGreaterThanOrEqual(solid.maxY - cut.maxY, clearance, "\(face): a cut-out too close to the bottom edge")
             }
         }
     }
 
     func testTheCapsulesAreAsThickAsTheProportionsSay() {
-        // The icon's proportions (lines 9 thicknesses wide) at the size of the plate: 2 pt thick, 18 pt wide lines.
+        // The icon's proportions (lines 9 thicknesses wide) at the size of the plate: 1.5 pt thick, 13.5 pt wide lines.
         let marks = WorkGlyph.marks
         XCTAssertEqual(marks.count, 4)
-        let thickness: CGFloat = 2
+        let thickness: CGFloat = 1.5
         for line in [[marks[0], marks[1]], [marks[2], marks[3]]] {
             XCTAssertEqual(line[0].y, line[1].y)
             let width = (line[1].x1 + thickness / 2) - (line[0].x0 - thickness / 2)
-            XCTAssertEqual(width, 18, accuracy: 0.001, "both lines are 9 thicknesses wide")
+            XCTAssertEqual(width, 13.5, accuracy: 0.001, "both lines are 9 thicknesses wide")
+            XCTAssertEqual((line[0].x0 + line[1].x1) / 2, WorkGlyph.plate.midX, accuracy: 0.001, "the lines are in the middle")
         }
-        XCTAssertEqual(marks[2].y - marks[0].y, 6, "the lines are 6 pt apart, the plate's middle between them")
+        XCTAssertEqual(marks[2].y - marks[0].y, 2.5, "the lines are 2.5 pt apart, the plate's middle between them")
         XCTAssertEqual((marks[0].y + marks[2].y) / 2, WorkGlyph.plate.midY)
+        // The edges of the lines lie on whole pixels at 2x (a point is 2 pixels), so the lines are crisp on Retina.
+        for mark in [marks[0], marks[2]] {
+            XCTAssertEqual(((mark.y - thickness / 2) * 2).truncatingRemainder(dividingBy: 1), 0, accuracy: 0.001)
+            XCTAssertEqual(((mark.y + thickness / 2) * 2).truncatingRemainder(dividingBy: 1), 0, accuracy: 0.001)
+        }
     }
 
     // MARK: It stands still
